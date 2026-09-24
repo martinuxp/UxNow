@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" role="img" aria-labelledby="title desc">
+  <title id="title">Luz de domingo</title>
+  <desc id="desc">Composición abstracta original de círculos luminosos y ondas.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17213d"/>
+      <stop offset="0.46" stop-color="#824e72"/>
+      <stop offset="1" stop-color="#eea56f"/>
+    </linearGradient>
+    <radialGradient id="sun">
+      <stop offset="0" stop-color="#fffbd1"/>
+      <stop offset="0.38" stop-color="#ffd08c" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#ff9f75" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="28"/></filter>
+  </defs>
+  <rect width="800" height="800" rx="76" fill="url(#bg)"/>
+  <circle cx="575" cy="220" r="260" fill="url(#sun)" filter="url(#blur)"/>
+  <g fill="none" stroke="#fff" stroke-opacity=".52" stroke-width="4">
+    <path d="M-80 560C110 410 230 720 440 548S700 400 900 560"/>
+    <path d="M-90 610C120 455 250 760 450 604S730 455 910 620" stroke-opacity=".3"/>
+    <path d="M-100 660C110 515 250 800 470 660S735 515 920 680" stroke-opacity=".18"/>
+  </g>
+  <circle cx="210" cy="230" r="72" fill="#b9d3ff" fill-opacity=".18"/>
+  <circle cx="210" cy="230" r="40" fill="#fff" fill-opacity=".12"/>
+</svg>

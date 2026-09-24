@@ -1,0 +1,48 @@
+[package]
+name = "uxnow"
+version = "0.1.0"
+description = "A focused AirPlay audio receiver for Windows, powered by uxPlay"
+authors = ["UxNow contributors"]
+license = "AGPL-3.0-only"
+repository = "https://github.com/uxnow/uxnow"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "uxnow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "uxnow"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.3"
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "linux-native-sync-persistent"] }
+notify = "8"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros"] }
+walkdir = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Power",
+  "Win32_UI_Shell_PropertiesSystem"
+] }
