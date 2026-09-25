@@ -35,6 +35,28 @@ if ($sourceText -notmatch 'memcpy\(proof,\s*client_proof,\s*sizeof\(proof\)\)' -
     throw "El checkout de uxPlay no contiene las tres correcciones del aviso GHSA-479c-ww7g-wgp8."
 }
 
+$manifest = Join-Path $runtime 'RUNTIME_SOURCES.md'
+$msysLicenses = Join-Path $runtime 'licenses\MSYS2'
+$uxplayLicense = Join-Path $runtime 'licenses\uxPlay\LICENSE'
+if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+    throw 'Falta el inventario RUNTIME_SOURCES.md. Ejecuta scripts/write-runtime-manifest.ps1.'
+}
+if (-not (Test-Path -LiteralPath $msysLicenses -PathType Container) -or
+    -not (Test-Path -LiteralPath $uxplayLicense -PathType Leaf)) {
+    throw 'Faltan avisos de licencia de MSYS2 o uxPlay en el runtime.'
+}
+$manifestText = Get-Content -LiteralPath $manifest -Raw
+$packageRows = [regex]::Matches($manifestText, '(?m)^\| `mingw-w64-[^`]+` \|')
+if ($packageRows.Count -lt 1 -or
+    $manifestText -notmatch 'repo\.msys2\.org/mingw/sources/' -or
+    $manifestText -notmatch 'ffmpeg.*GPL-3\.0-or-later') {
+    throw 'El inventario de runtime no contiene paquetes, fuentes versionadas y licencia FFmpeg.'
+}
+$licenseCount = (Get-ChildItem -LiteralPath $msysLicenses -Recurse -File | Measure-Object).Count
+if ($licenseCount -lt 50) {
+    throw "El runtime solo contiene $licenseCount textos de licencia MSYS2; se esperaba el conjunto completo."
+}
+
 $requiredFiles = @(
     'bin\libgstreamer-1.0-0.dll',
     'lib\gstreamer-1.0\libgstapp.dll',
@@ -48,7 +70,8 @@ $requiredFiles = @(
     'lib\gstreamer-1.0\libgstplayback.dll',
     'lib\gstreamer-1.0\libgstautodetect.dll',
     'lib\gstreamer-1.0\libgstvideoparsersbad.dll',
-    'RUNTIME_SOURCES.md'
+    'RUNTIME_SOURCES.md',
+    'licenses\uxPlay\LICENSE'
 )
 foreach ($relativePath in $requiredFiles) {
     $fullPath = Join-Path $runtime $relativePath

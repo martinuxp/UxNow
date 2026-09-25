@@ -21,6 +21,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   uiFont: DEFAULT_UI_FONT,
   lyricsFont: DEFAULT_LYRICS_FONT,
   globalLyricsOffsetMs: 0,
+  syncWithUxplayProgress: true,
 };
 
 interface AppStore {

@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Navigation } from "./components/Navigation";
 import { WindowChrome } from "./components/WindowChrome";
 import { parseLyrics } from "./lib/lyrics";
+import { interpolatedProgress, type ProgressSample } from "./lib/progressClock";
 import { isSameSong } from "./lib/trackIdentity";
 import { fontFamilyFor, fontWeightFor } from "./lib/fonts";
 import { command, isTauri, onEvent } from "./lib/tauri";
@@ -20,6 +21,7 @@ export default function App() {
   const PageComponent = PAGES[store.page];
   const demoActive = Boolean(store.track?.isDemo && store.servicePhase === "streaming");
   const demoDuration = store.track?.durationMs ?? 84_000;
+  const progressSample = useRef<ProgressSample | null>(null);
 
   useEffect(() => {
     const actions = useAppStore.getState();
@@ -33,10 +35,24 @@ export default function App() {
           command<AppConfig>("get_config"), command<AudioDevice[]>("list_audio_devices"), command<LibraryEntry[]>("list_library"),
         ]);
         if (!cancelled) { actions.setConfig(config); actions.setDevices(devices); actions.setLibrary(library); }
-        unlisten.push(await onEvent<UxPlayEvent>("uxplay://event", (event) => { actions.setService(event.phase, event.message); if (event.positionMs != null) actions.setPosition(event.positionMs); }));
+        unlisten.push(await onEvent<UxPlayEvent>("uxplay://event", (event) => {
+          actions.setService(event.phase, event.message);
+          if (event.positionMs != null) {
+            progressSample.current = { positionMs: event.positionMs, receivedAt: performance.now() };
+            actions.setPosition(event.positionMs);
+          } else if (event.phase !== "streaming") {
+            progressSample.current = null;
+            actions.setPosition(0);
+          }
+        }));
         unlisten.push(await onEvent<TrackMetadata>("metadata://changed", (track) => {
           const previous = useAppStore.getState();
-          const keepLyrics = isSameSong(previous.track, track) && (previous.lyricsState === "ready" || previous.lyricsState === "searching");
+          const sameSong = isSameSong(previous.track, track);
+          const keepLyrics = sameSong && (previous.lyricsState === "ready" || previous.lyricsState === "searching");
+          if (!sameSong) {
+            progressSample.current = null;
+            actions.setPosition(0);
+          }
           actions.setTrack(track);
           actions.setPage("now-playing");
           if (!keepLyrics) void resolveLyrics(track);
@@ -87,9 +103,15 @@ export default function App() {
     if (demoActive || store.servicePhase !== "streaming") return;
     let previous = performance.now();
     const timer = window.setInterval(() => {
-      const now = performance.now();
       const state = useAppStore.getState();
-      state.setPosition(state.positionMs + now - previous);
+      const now = performance.now();
+      if (state.track && !state.track.isDemo) {
+        if (state.config.syncWithUxplayProgress) {
+          if (progressSample.current) state.setPosition(interpolatedProgress(progressSample.current, now));
+        } else {
+          state.setPosition(state.positionMs + now - previous);
+        }
+      }
       previous = now;
     }, 50);
     return () => window.clearInterval(timer);

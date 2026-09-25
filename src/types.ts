@@ -95,6 +95,7 @@ export interface AppConfig {
   uiFont: FontChoice;
   lyricsFont: FontChoice;
   globalLyricsOffsetMs: number;
+  syncWithUxplayProgress: boolean;
 }
 
 

@@ -25,6 +25,7 @@ pub struct AppConfig {
     pub ui_font: String,
     pub lyrics_font: String,
     pub global_lyrics_offset_ms: i64,
+    pub sync_with_uxplay_progress: bool,
 }
 
 impl Default for AppConfig {
@@ -53,6 +54,7 @@ impl Default for AppConfig {
             spicy_lyrics_enabled: false,
             lyrics_font: "Google Sans Flex SemiBold".into(),
             global_lyrics_offset_ms: 0,
+            sync_with_uxplay_progress: true,
         }
     }
 }
@@ -196,11 +198,21 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "receiverName": "Sala" }))
                 .expect("legacy config");
         assert_eq!(legacy.global_lyrics_offset_ms, 0);
+        assert!(legacy.sync_with_uxplay_progress);
 
         let adjusted = update(&legacy, serde_json::json!({ "globalLyricsOffsetMs": 750 }))
             .expect("update global correction");
         assert_eq!(adjusted.global_lyrics_offset_ms, 750);
+        assert!(adjusted.sync_with_uxplay_progress);
         assert_eq!(legacy.global_lyrics_offset_ms, 0);
+
+        let without_progress_sync = update(
+            &adjusted,
+            serde_json::json!({ "syncWithUxplayProgress": false }),
+        )
+        .expect("disable progress synchronization");
+        assert!(!without_progress_sync.sync_with_uxplay_progress);
+        assert_eq!(without_progress_sync.global_lyrics_offset_ms, 750);
 
         let bounded = update(
             &adjusted,

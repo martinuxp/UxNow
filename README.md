@@ -7,8 +7,8 @@ that process to a selected Windows audio endpoint through GStreamer's
 their existing output.
 
 > Status: functional MVP. The complete interface and demo work without native
-> dependencies. Real AirPlay reception requires a compatible `uxplay.exe` and
-> GStreamer installation.
+> dependencies. The integrated Windows installer includes uxPlay and GStreamer;
+> source-development builds may use a separately installed runtime.
 
 ## What works
 
@@ -38,10 +38,11 @@ their existing output.
 - For real reception: the pinned uxPlay snapshot and GStreamer 1.24+ with `wasapisink`, ALAC,
   and the plugins required by uxPlay.
 
-The normal installer keeps uxPlay and GStreamer external. An optional integrated
-installer profile exists, but it refuses the older runtime currently in
-`_internal` and must not be distributed until the new bundle passes a clean-PC
-test and license review.
+The GitHub release installer is built with `npm run build:bundled` and includes
+uxPlay 1.74 and GStreamer under `_internal`. A plain `npm run tauri build`
+does not include them. AirPlay playback and installation still need checking
+on a clean Windows 10/11 PC; the local smoke test only checks the packaged
+executables and WASAPI plugin.
 
 ## Development
 
@@ -93,11 +94,9 @@ binary in this order:
 
 If `_internal/bin` also contains GStreamer and `_internal/lib/gstreamer-1.0`
 contains the WASAPI plugin, UxNow sets their paths only for its uxPlay child
-process. The locally supplied `_internal` currently contains UxPlay 1.72 and
-is for development testing only; it is not included in release installers.
-Before distributing a bundled runtime, replace it with a reviewed build from
-UxPlay 1.73.7 or later, verify the required DLLs/plugins on a clean PC, and
-include the corresponding source and license notices.
+process. The locally supplied `_internal` is for development testing only and
+is not copied into release installers. The integrated build uses the separately
+staged `runtime/bundled-candidate` and includes its source and license inventory.
 
 ### Building the official Windows runtime
 
@@ -128,17 +127,17 @@ UCRT64 DLL dependencies to `runtime/bundled-candidate` without touching the
 older `_internal` used for development. Do not mix new and old DLLs.
 The runtime in the installer still appears under `_internal`.
 
-The audio-only candidate currently pulls in many FFmpeg transitive libraries;
-review their licenses and source obligations before redistribution. Add
-`runtime/bundled-candidate/RUNTIME_SOURCES.md` identifying the exact uxPlay
-revision, MSYS2 package versions, upstream URLs, licenses, and corresponding
-source code. The file must be a real inventory, not a placeholder. Then run:
+The audio-only candidate pulls in FFmpeg transitive libraries. The staging
+script generates `runtime/bundled-candidate/RUNTIME_SOURCES.md` with the exact
+uxPlay revision, MSYS2 package versions, licenses, and corresponding source
+archives, and copies the installed license texts. The bundle script also
+generates `THIRD_PARTY_DEPENDENCIES.md` for npm and Rust dependencies. Then run:
 
 ```powershell
 npm run build:bundled
 ```
 
-That optional command checks uxPlay is at least 1.73.7, verifies the checkout
+That command checks uxPlay is at least 1.73.7, verifies the checkout
 has the three fixes from GHSA-479c-ww7g-wgp8, and checks the minimum GStreamer
 files and source inventory before bundling the candidate as `_internal`.
 It does **not** prove that every DLL is present or
@@ -175,7 +174,7 @@ album, and duration, downloads only validated TTML from its documented storage
 host, and shows `Letras: BiniLyrics · lyrics.binimum.org` with each result.
 
 Provider attribution is retained in Now Playing. Local associations, the global
-lyrics offset, cache, and private playback history live in the app data directory.
+lyrics offset, synchronization mode, cache, and private playback history live in the app data directory.
 The per-song offset stays only in memory until UxNow closes. UxNow has
 no analytics and does not store audio.
 
@@ -199,7 +198,9 @@ npm run tauri build
   adapter. A future structured event stream can replace it without changing
   the UI.
 - Lyrics progress is interpolated between uxPlay progress reports. Exact
-  behaviour varies by sender application.
+  behaviour varies by sender application. In Settings, “Sincronizar con uxPlay”
+  waits for the first real progress sample and prevents the clock running ahead;
+  the switch can be turned off independently of the saved global lyrics offset.
 - BiniLyrics, Unison, and LRCLIB require no key. Availability and catalogue
   coverage depend on each external service.
 - SpicyLyrics requires Spotify OAuth (PKCE), online-lyrics consent, and its

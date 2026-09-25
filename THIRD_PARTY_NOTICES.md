@@ -15,10 +15,10 @@ retain their own copyright notices and licenses.
 - Role: external AirPlay receiver process. UxNow does not reimplement or
   modify the AirPlay protocol.
 
-The normal installer does not bundle the uxPlay executable. An optional
-integrated installer profile requires a reviewed runtime and a
-`runtime/bundled-candidate/RUNTIME_SOURCES.md` inventory with exact build and
-source details. That candidate is installed under `_internal`.
+The integrated release installer includes uxPlay and the GStreamer runtime
+under `_internal`. Its exact build, binary package inventory, source archive
+links, and installed license texts are documented in
+`_internal/RUNTIME_SOURCES.md` and `_internal/licenses`.
 A pinned upstream checkout is kept in `vendor/uxplay` for reproducible
 development and license review.
 
@@ -42,8 +42,8 @@ development and license review.
 
 Tauri, React, Lucide, Zustand, rusqlite, reqwest, notify, and their
 transitive dependencies are used under the licenses contained in their source
-distributions and package metadata. Release automation must generate a full
-dependency license inventory before publishing binaries.
+distributions and package metadata. The generated inventory is included as
+`THIRD_PARTY_DEPENDENCIES.md` in the installer.
 
 ## Online lyric services
 

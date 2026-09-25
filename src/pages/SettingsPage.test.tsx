@@ -27,4 +27,15 @@ describe("settings switches", () => {
     }
     expect(useAppStore.getState().config.enabledProviders).toEqual([]);
   });
+
+  it("allows toggling uxPlay progress synchronization independently of the global offset", () => {
+    useAppStore.getState().setConfig({ ...DEFAULT_CONFIG, globalLyricsOffsetMs: 750 });
+    render(<SettingsPage />);
+    const toggle = screen.getByRole("switch", { name: "Sincronizar con el progreso de uxPlay" });
+    fireEvent.click(toggle);
+    expect(useAppStore.getState().config.syncWithUxplayProgress).toBe(false);
+    expect(useAppStore.getState().config.globalLyricsOffsetMs).toBe(750);
+    fireEvent.click(toggle);
+    expect(useAppStore.getState().config.syncWithUxplayProgress).toBe(true);
+  });
 });

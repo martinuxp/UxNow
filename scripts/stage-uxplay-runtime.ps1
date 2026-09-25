@@ -64,4 +64,6 @@ while ($pending.Count -gt 0) {
 $files = Get-ChildItem -LiteralPath $stage -Recurse -File
 $sizeMiB = [math]::Round(($files | Measure-Object Length -Sum).Sum / 1MB, 1)
 Write-Host "Candidato creado en $stage ($($files.Count) archivos; $sizeMiB MiB)."
-Write-Host 'El _internal anterior no se ha modificado. Faltan pruebas aisladas y licencias antes de distribuir.'
+& (Join-Path $PSScriptRoot 'write-runtime-manifest.ps1') -MsysRoot $MsysRoot
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host 'El _internal anterior no se ha modificado. El candidato aún requiere prueba en Windows limpio antes de distribuir.'

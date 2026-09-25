@@ -132,6 +132,7 @@ export function SettingsPage() {
           </SettingsSection>
 
           <SettingsSection title="Letras" icon={<Database />}>
+            <SettingRow title="Sincronizar con uxPlay" description="Espera el primer dato de progreso antes de mover las letras. Desactívalo si te funciona mejor el reloj anterior."><UxSwitch label="Sincronizar con el progreso de uxPlay" selected={config.syncWithUxplayProgress} onChange={(syncWithUxplayProgress) => void persist({ syncWithUxplayProgress })} /></SettingRow>
             <SettingRow title="Ajuste global de sincronización" description="Se aplica a todas las canciones. El ajuste de Sonando ahora es temporal."><div className="global-offset-control"><Slider aria-label="Ajuste global de sincronización de letras" minValue={-5000} maxValue={5000} step={50} value={globalOffset} onChange={(value) => setGlobalOffset(Number(value))} onChangeEnd={(value) => void persist({ globalLyricsOffsetMs: Number(value) })}><Slider.Track><Slider.Fill /><Slider.Thumb /></Slider.Track></Slider><output>{globalOffset >= 0 ? "+" : ""}{(globalOffset / 1000).toFixed(2)} s</output></div></SettingRow>
             <SettingRow title="Buscar en internet" description="Envía título, artista, álbum y duración; nunca archivos locales."><UxSwitch label="Buscar letras online" selected={config.onlineLyricsConsent} onChange={(onlineLyricsConsent) => void persist({ onlineLyricsConsent })} /></SettingRow>
             <div className="provider-list" aria-label="Proveedores de letras online">
