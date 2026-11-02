@@ -1,17 +1,19 @@
 import { Button, Tooltip } from "@heroui/react";
 import { BookOpenText, Radio, Settings, Sparkles } from "lucide-react";
+import { useI18n, type MessageKey } from "../i18n";
 import type { Page } from "../types";
 
-const ITEMS: Array<{ page: Page; label: string; icon: typeof Radio }> = [
-  { page: "receiver", label: "Receptor", icon: Radio },
-  { page: "now-playing", label: "Sonando ahora", icon: Sparkles },
-  { page: "library", label: "Letras locales", icon: BookOpenText },
-  { page: "settings", label: "Ajustes", icon: Settings },
+const ITEMS: Array<{ page: Page; label: MessageKey; icon: typeof Radio }> = [
+  { page: "receiver", label: "nav.receiver", icon: Radio },
+  { page: "now-playing", label: "nav.nowPlaying", icon: Sparkles },
+  { page: "library", label: "nav.library", icon: BookOpenText },
+  { page: "settings", label: "nav.settings", icon: Settings },
 ];
 
-export function Navigation({ page, onChange }: { page: Page; onChange: (page: Page) => void }) {
+export function Navigation({ page, onChange, live = false }: { page: Page; onChange: (page: Page) => void; live?: boolean }) {
+  const { t, tr } = useI18n();
   return (
-    <nav className="nav" aria-label="Navegación principal">
+    <nav className="nav" aria-label={t("nav.label")}>
       <div className="brand" aria-label="UxNow">
         <span className="brand-mark"><span /></span>
         <span>UxNow</span>
@@ -27,16 +29,17 @@ export function Navigation({ page, onChange }: { page: Page; onChange: (page: Pa
                 onPress={() => onChange(itemPage)}
                 aria-current={page === itemPage ? "page" : undefined}
                 data-page={itemPage}
+                data-live={itemPage === "now-playing" && live ? "true" : undefined}
               >
                 <Icon size={18} strokeWidth={1.8} />
-                <span>{label}</span>
+                <span>{t(label)}</span>
               </Button>
             </Tooltip.Trigger>
-            <Tooltip.Content placement="right">{label}</Tooltip.Content>
+            <Tooltip.Content placement="right">{t(label)}</Tooltip.Content>
           </Tooltip>
         ))}
       </div>
-      <p className="nav-foot">AirPlay de audio<br />en tu red local</p>
+      <p className="nav-foot">{tr("nav.foot", { br: <br /> })}</p>
     </nav>
   );
 }

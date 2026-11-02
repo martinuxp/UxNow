@@ -1,6 +1,6 @@
 [package]
 name = "uxnow"
-version = "0.1.0"
+version = "0.1.1"
 description = "A focused AirPlay audio receiver for Windows, powered by uxPlay"
 authors = ["UxNow contributors"]
 license = "AGPL-3.0-only"

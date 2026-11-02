@@ -75,6 +75,15 @@ if (-not (Test-Path -LiteralPath $uxplayLicense -PathType Leaf)) {
 $uxplayLicenseDirectory = Join-Path $runtime 'licenses\uxPlay'
 New-Item -ItemType Directory -Path $uxplayLicenseDirectory -Force | Out-Null
 Copy-Item -LiteralPath $uxplayLicense -Destination $uxplayLicenseDirectory -Force
+$uxplayPatches = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'patches\uxplay') -Filter '*.patch' -File | Sort-Object Name)
+if ($uxplayPatches.Count -eq 0) { throw 'No se encontraron los parches de uxPlay en patches/uxplay.' }
+$uxplayPatchDirectory = Join-Path $uxplayLicenseDirectory 'patches'
+New-Item -ItemType Directory -Path $uxplayPatchDirectory -Force | Out-Null
+foreach ($patch in $uxplayPatches) {
+    & git -C (Join-Path $projectRoot 'vendor\uxplay') apply --reverse --check $patch.FullName
+    if ($LASTEXITCODE -ne 0) { throw "El checkout de uxPlay no tiene aplicado $($patch.Name)." }
+    Copy-Item -LiteralPath $patch.FullName -Destination $uxplayPatchDirectory -Force
+}
 
 $uxplayVersion = (& (Join-Path $runtime 'bin\uxplay.exe') -v 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $uxplayVersion -notmatch 'UxPlay version\s+1\.74') {
@@ -93,7 +102,10 @@ $lines.Add('This file is generated from the local MSYS2 UCRT64 package database 
 $lines.Add('')
 $lines.Add('## Receiver and media runtime')
 $lines.Add('')
-$lines.Add("- uxPlay: 1.74, upstream source commit ``$uxplayCommit`` from [FDH2/UxPlay](https://github.com/FDH2/UxPlay/tree/$uxplayCommit).")
+$lines.Add("- uxPlay: 1.74, upstream source commit ``$uxplayCommit`` from [FDH2/UxPlay](https://github.com/FDH2/UxPlay/tree/$uxplayCommit), with these build patches applied (copies in ``licenses/uxPlay/patches/``):")
+foreach ($patch in $uxplayPatches) {
+    $lines.Add("  - ``$($patch.Name)``")
+}
 $lines.Add('- GStreamer: 1.28.7, MSYS2 UCRT64 packages. The bundled WASAPI plugin is `gst-plugins-bad`; `wasapisink` was enumerated by `gst-inspect-1.0` during packaging validation.')
 $lines.Add('- MSYS2 package license texts are copied from the matching UCRT64 installation into `licenses/MSYS2/`. Package-level source archives and declared licenses are listed below.')
 $lines.Add('')
@@ -109,7 +121,7 @@ $lines.Add('')
 $lines.Add('## Build provenance')
 $lines.Add('')
 $lines.Add('- Build environment: MSYS2 UCRT64 (x86_64), with installed package versions recorded above.')
-$lines.Add('- uxPlay is built from the pinned official git submodule using the upstream Windows/MSYS2 instructions; no AirPlay protocol code is forked by UxNow.')
+$lines.Add('- uxPlay is built from the pinned official git submodule using the upstream Windows/MSYS2 instructions after applying `patches/uxplay/`; those patches only change the Windows build and no AirPlay protocol code is forked by UxNow.')
 $lines.Add('- Runtime closure is staged by `scripts/stage-uxplay-runtime.ps1`, which copies the executable, required GStreamer plugins/scanner, and imported UCRT64 DLLs.')
 $lines.Add('- The MSI/NSIS bundle embeds this directory as `_internal/` via `src-tauri/tauri.bundled.conf.json`.')
 $lines.Add('')

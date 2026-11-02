@@ -927,7 +927,7 @@ See `THIRD_PARTY_NOTICES.md`, `_internal/RUNTIME_SOURCES.md`, and `_internal/lic
 | urlpattern | 0.3.0 | MIT |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT |
 | uuid | 1.26.1 | Apache-2.0 OR MIT |
-| uxnow | 0.1.0 | AGPL-3.0-only |
+| uxnow | 0.1.1 | AGPL-3.0-only |
 | vcpkg | 0.2.15 | MIT/Apache-2.0 |
 | version_check | 0.9.5 | MIT/Apache-2.0 |
 | version-compare | 0.2.1 | MIT |

@@ -28,6 +28,25 @@ describe("settings switches", () => {
     expect(useAppStore.getState().config.enabledProviders).toEqual([]);
   });
 
+  it("offers SpicyLyrics without a linked Spotify account", () => {
+    useAppStore.getState().setConfig({ ...DEFAULT_CONFIG, spicyLyricsEnabled: false });
+    render(<SettingsPage />);
+    expect(screen.getByRole("button", { name: /Vincular Spotify/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("switch", { name: "Activar SpicyLyrics" }));
+    expect(useAppStore.getState().config.spicyLyricsEnabled).toBe(true);
+  });
+
+  it("shows the saved language and switches the page to it", () => {
+    useAppStore.getState().setConfig({ ...DEFAULT_CONFIG });
+    const { rerender } = render(<SettingsPage />);
+    expect(screen.getByRole("heading", { name: "Ajustes" })).toBeTruthy();
+    expect(screen.getAllByText("Español").length).toBeGreaterThan(0);
+    useAppStore.getState().patchConfig({ language: "en" });
+    rerender(<SettingsPage />);
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Search lyrics online" })).toBeTruthy();
+  });
+
   it("allows toggling uxPlay progress synchronization independently of the global offset", () => {
     useAppStore.getState().setConfig({ ...DEFAULT_CONFIG, globalLyricsOffsetMs: 750 });
     render(<SettingsPage />);

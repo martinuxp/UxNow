@@ -6,11 +6,44 @@ use crate::{
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 
+/// SpicyLyrics is keyed by Spotify track ID. A linked Spotify account finds the
+/// ID through Spotify search; without one, ListenBrainz resolves it from metadata.
 pub async fn find(
     client: &Client,
     track: &TrackMetadata,
-    spotify_token: &str,
+    spotify_token: Option<&str>,
 ) -> Result<Option<LyricsCandidate>, String> {
+    let mut track_ids = Vec::new();
+    let mut spotify_error = None;
+    if let Some(token) = spotify_token {
+        match spotify_search(client, track, token).await {
+            Ok(id) => track_ids.extend(id),
+            Err(error) => spotify_error = Some(error),
+        }
+    }
+    let from_metadata = track_ids.is_empty();
+    if from_metadata {
+        track_ids = crate::listenbrainz::spotify_ids(client, track).await?;
+        if track_ids.is_empty() {
+            return spotify_error.map_or(Ok(None), Err);
+        }
+    }
+    for track_id in &track_ids {
+        if let Some(mut candidate) = lyrics_for(client, track, track_id).await? {
+            if from_metadata {
+                candidate.confidence = 0.9;
+            }
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+async fn spotify_search(
+    client: &Client,
+    track: &TrackMetadata,
+    spotify_token: &str,
+) -> Result<Option<String>, String> {
     let query = format!("track:{} artist:{}", track.title, track.artist);
     let search: Value = client
         .get("https://api.spotify.com/v1/search")
@@ -24,9 +57,14 @@ pub async fn find(
         .json()
         .await
         .map_err(|error| error.to_string())?;
-    let Some(track_id) = best_spotify_track(&search, track) else {
-        return Ok(None);
-    };
+    Ok(best_spotify_track(&search, track))
+}
+
+async fn lyrics_for(
+    client: &Client,
+    track: &TrackMetadata,
+    track_id: &str,
+) -> Result<Option<LyricsCandidate>, String> {
     let mut response = None;
     for attempt in 0..3 {
         let result = client
@@ -42,18 +80,18 @@ pub async fn find(
         }
         tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt + 1))).await;
     }
-    let response = response.ok_or("SpicyLyrics no respondió")?;
+    let response = response.ok_or_else(|| crate::i18n::msg("backend.spicy.noResponse"))?;
     if response.status() == StatusCode::NOT_FOUND {
         return Ok(None);
     }
     if response.status() == StatusCode::SERVICE_UNAVAILABLE {
-        return Err("SpicyLyrics no respondió esta vez. Puedes probar otra fuente.".into());
+        return Err(crate::i18n::msg("backend.spicy.unavailable"));
     }
     if matches!(
         response.status(),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
     ) {
-        return Err("SpicyLyrics no aceptó la clave de esta instalación.".into());
+        return Err(crate::i18n::msg("backend.spicy.keyRejected"));
     }
     let response: Value = response
         .error_for_status()
@@ -61,7 +99,7 @@ pub async fn find(
         .json()
         .await
         .map_err(|error| format!("SpicyLyrics: {error}"))?;
-    Ok(candidate_from_response(track, &track_id, &response))
+    Ok(candidate_from_response(track, track_id, &response))
 }
 
 fn best_spotify_track(search: &Value, track: &TrackMetadata) -> Option<String> {
@@ -151,14 +189,13 @@ fn candidate_from_response(
                     return None;
                 }
                 Some(AttributionLink {
-                    label: format!(
-                        "{}: {}",
+                    label: crate::i18n::msg_with(
                         if *role == "Uploader" {
-                            "Subió"
+                            "backend.spicy.uploader"
                         } else {
-                            "Sincronizó"
+                            "backend.spicy.maker"
                         },
-                        person.get("username")?.as_str()?
+                        &[("user", person.get("username")?.as_str()?.to_string())],
                     ),
                     url: url.to_string(),
                 })
@@ -178,7 +215,7 @@ fn candidate_from_response(
         content: body.to_string(),
         translation: None,
         source: "spicylyrics".into(),
-        attribution: format!("Letras: {provider}"),
+        attribution: crate::lyrics::attribution(provider.into()),
         attribution_links,
         source_url: Some(format!("https://open.spotify.com/track/{track_id}")),
         confidence: 0.95,
@@ -197,6 +234,30 @@ mod tests {
             duration_ms: Some(207_000),
             cover_data_url: None,
             is_demo: false,
+        }
+    }
+    #[test]
+    #[ignore]
+    fn temp_live_lookup_without_spotify() {
+        let client = Client::builder().user_agent("UxNow/0.1").build().expect("client");
+        for (title, artist, album) in [
+            ("Shallow", "Lady Gaga & Bradley Cooper", "A Star Is Born Soundtrack"),
+            ("DtMF", "Bad Bunny", "DeBÍTIRAR MÁS FOTos"),
+            ("el mundo y yo", "AKRIILA", "lucy miró al mundo y notó que está girando"),
+        ] {
+            let track = TrackMetadata {
+                title: title.into(),
+                artist: artist.into(),
+                album: Some(album.into()),
+                duration_ms: None,
+                cover_data_url: None,
+                is_demo: false,
+            };
+            let found = tauri::async_runtime::block_on(find(&client, &track, None));
+            println!(
+                "{title}: {:?}",
+                found.map(|c| c.map(|c| (c.id, c.sync_type, c.attribution, c.confidence)))
+            );
         }
     }
     #[test]

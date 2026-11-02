@@ -2,6 +2,8 @@ mod audio;
 mod binimum;
 mod config;
 mod fonts;
+mod i18n;
+mod listenbrainz;
 mod lyrics;
 mod metadata;
 mod native_process;
@@ -31,7 +33,18 @@ struct AppState {
     uxplay: Arc<UxPlayRuntime>,
     spotify: spotify::SharedSession,
     current_track: Mutex<Option<metadata::TrackMetadata>>,
+    native_strings: Mutex<i18n::NativeStrings>,
     shutting_down: AtomicBool,
+}
+
+const TRAY_ID: &str = "main";
+
+/// Tray menu entries whose text follows the UI language.
+struct TrayItems {
+    show: tauri::menu::MenuItem<tauri::Wry>,
+    start: tauri::menu::MenuItem<tauri::Wry>,
+    stop: tauri::menu::MenuItem<tauri::Wry>,
+    quit: tauri::menu::MenuItem<tauri::Wry>,
 }
 
 fn request_exit(app: tauri::AppHandle) {
@@ -51,6 +64,7 @@ fn request_exit(app: tauri::AppHandle) {
         app.exit(0);
     });
 }
+/// `label` and `detail` are plain text or message descriptors (see `i18n`).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticItem {
@@ -69,9 +83,27 @@ struct Diagnostics {
     binimum: DiagnosticItem,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UxPlayExecutable {
+    effective_path: Option<String>,
+    bundled_path: Option<String>,
+}
+
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> AppConfig {
     state.config.lock().expect("config lock").clone()
+}
+
+#[tauri::command]
+fn get_uxplay_executable(state: State<'_, AppState>) -> UxPlayExecutable {
+    let config = state.config.lock().expect("config lock").clone();
+    UxPlayExecutable {
+        effective_path: config::discover_uxplay(&config, &state.resource_dir)
+            .map(|path| path.to_string_lossy().into_owned()),
+        bundled_path: config::bundled_uxplay(&state.resource_dir)
+            .map(|path| path.to_string_lossy().into_owned()),
+    }
 }
 
 #[tauri::command]
@@ -82,7 +114,7 @@ fn update_config(state: State<'_, AppState>, patch: Value) -> Result<AppConfig, 
     let mut guard = state
         .config
         .lock()
-        .map_err(|_| "No se pudo bloquear la configuración")?;
+        .map_err(|_| i18n::msg("backend.config.lockFailed"))?;
     let next = config::update(&guard, patch)?;
     config::save_atomic(&state.config_path, &next)?;
     *guard = next.clone();
@@ -112,7 +144,39 @@ fn start_spotify_link(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<spotify::LinkStatus, String> {
-    spotify::start_link(app, state.spotify.clone())
+    let pages = {
+        let strings = state
+            .native_strings
+            .lock()
+            .map_err(|_| i18n::msg("backend.config.lockFailed"))?;
+        spotify::CallbackPages {
+            linked: strings.spotify_linked_page.clone(),
+            mismatch: strings.spotify_mismatch_page.clone(),
+        }
+    };
+    spotify::start_link(app, state.spotify.clone(), pages)
+}
+
+#[tauri::command]
+fn set_native_strings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    strings: i18n::NativeStrings,
+) -> Result<(), String> {
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let _ = items.show.set_text(&strings.tray_show);
+        let _ = items.start.set_text(&strings.tray_start);
+        let _ = items.stop.set_text(&strings.tray_stop);
+        let _ = items.quit.set_text(&strings.tray_quit);
+    }
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_tooltip(Some(&strings.tray_tooltip));
+    }
+    *state
+        .native_strings
+        .lock()
+        .map_err(|_| i18n::msg("backend.config.lockFailed"))? = strings;
+    Ok(())
 }
 
 #[tauri::command]
@@ -159,14 +223,14 @@ async fn set_stream_volume(state: State<'_, AppState>, volume: f32) -> Result<()
         .process_id
         .lock()
         .await
-        .ok_or("uxPlay no está en ejecución")?;
+        .ok_or_else(|| i18n::msg("backend.uxplay.notRunning"))?;
     let device = state
         .config
         .lock()
         .map_err(|_| "Config lock")?
         .preferred_audio_device_id
         .clone()
-        .ok_or("Selecciona una salida de audio")?;
+        .ok_or_else(|| i18n::msg("backend.uxplay.selectOutput"))?;
     audio::set_process_volume(&device, pid, volume)
 }
 
@@ -257,8 +321,8 @@ fn reveal_file(path: String) -> Result<(), String> {
 async fn run_diagnostics(state: State<'_, AppState>) -> Result<Diagnostics, String> {
     let config = state.config.lock().expect("config lock").clone();
     let uxplay_path = config::discover_uxplay(&config, &state.resource_dir);
-    let gst = command_output("gst-inspect-1.0", &["--version"]);
-    let wasapi = command_output("gst-inspect-1.0", &["wasapisink"]);
+    let gst = gstreamer_output(uxplay_path.as_ref(), &["--version"]);
+    let wasapi = gstreamer_output(uxplay_path.as_ref(), &["wasapisink"]);
     let devices = audio::list_devices().unwrap_or_default();
     let selected = config
         .preferred_audio_device_id
@@ -283,31 +347,31 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Diagnostics, Stri
             "uxPlay",
             uxplay_path
                 .map(|v| v.display().to_string())
-                .unwrap_or("No encontrado; el modo demo sigue disponible".into()),
+                .unwrap_or_else(|| i18n::msg("backend.diagnostics.uxplayMissing")),
         ),
         gstreamer: item(
             !gst.is_empty(),
             "GStreamer",
             if gst.is_empty() {
-                "No encontramos gst-inspect-1.0".into()
+                i18n::msg("backend.diagnostics.gstreamerMissing")
             } else {
                 first_line(&gst)
             },
         ),
         wasapi: item(
             !wasapi.is_empty(),
-            "Salida WASAPI",
-            if wasapi.is_empty() {
-                "Instala el plugin WASAPI de GStreamer".into()
+            &i18n::msg("backend.diagnostics.wasapi"),
+            i18n::msg(if wasapi.is_empty() {
+                "backend.diagnostics.wasapiMissing"
             } else {
-                "wasapisink disponible".into()
-            },
+                "backend.diagnostics.wasapiAvailable"
+            }),
         ),
         network: item(
             network.to_ascii_lowercase().contains("private"),
-            "Red",
+            &i18n::msg("backend.diagnostics.network"),
             if network.is_empty() {
-                "No se pudo determinar el perfil".into()
+                i18n::msg("backend.diagnostics.networkUnknown")
             } else {
                 first_line(&network)
             },
@@ -315,19 +379,22 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Diagnostics, Stri
         firewall: item(
             !firewall.is_empty(),
             "Firewall",
-            if firewall.is_empty() {
-                "No encontramos una regla para uxPlay".into()
+            i18n::msg(if firewall.is_empty() {
+                "backend.diagnostics.firewallMissing"
             } else {
-                "Existe una regla asociada a uxPlay".into()
-            },
+                "backend.diagnostics.firewallFound"
+            }),
         ),
         audio: item(
             selected,
-            "Salida de UxNow",
+            &i18n::msg("backend.diagnostics.audio"),
             if selected {
-                "Dispositivo disponible".into()
+                i18n::msg("backend.diagnostics.audioAvailable")
             } else {
-                format!("{} salidas activas; selecciona una", devices.len())
+                i18n::msg_with(
+                    "backend.diagnostics.audioMissing",
+                    &[("count", devices.len().to_string())],
+                )
             },
         ),
         binimum: {
@@ -357,6 +424,36 @@ fn command_output(command: &str, args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+fn gstreamer_output(uxplay_path: Option<&PathBuf>, args: &[&str]) -> String {
+    if let Some(gst) = uxplay_path.and_then(|path| config::bundled_gstreamer(path)) {
+        let inspect = gst.bin_dir.join("gst-inspect-1.0.exe");
+        if inspect.is_file() {
+            let mut command = native_process::command(inspect);
+            let mut path = vec![gst.bin_dir];
+            if let Some(existing) = std::env::var_os("PATH") {
+                path.extend(std::env::split_paths(&existing));
+            }
+            if let Ok(path) = std::env::join_paths(path) {
+                command.env("PATH", path);
+            }
+            command
+                .env("GST_PLUGIN_PATH_1_0", &gst.plugin_dir)
+                .env("GST_PLUGIN_SYSTEM_PATH_1_0", &gst.plugin_dir);
+            if let Some(scanner) = gst.scanner {
+                command.env("GST_PLUGIN_SCANNER", scanner);
+            }
+            return command
+                .args(args)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+        }
+    }
+    command_output("gst-inspect-1.0", args)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -369,12 +466,13 @@ pub fn run() {
             let config_path = config_dir.join("config.json");
             let db_path = data_dir.join("uxnow.sqlite3");
             let runtime_dir = data_dir.join("runtime");
-            let resource_dir = app.path().resource_dir().unwrap_or_else(|_| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            let resource_dir = match app.path().resource_dir() {
+                Ok(path) => path,
+                Err(_) => std::env::current_exe()?
                     .parent()
-                    .unwrap()
-                    .to_path_buf()
-            });
+                    .ok_or_else(|| std::io::Error::other("No se encontró la carpeta de UxNow"))?
+                    .to_path_buf(),
+            };
             lyrics::init_db(&db_path).map_err(std::io::Error::other)?;
             metadata::start(app.handle().clone(), runtime_dir.clone())
                 .map_err(std::io::Error::other)?;
@@ -388,32 +486,31 @@ pub fn run() {
                 resource_dir,
                 uxplay: Arc::new(UxPlayRuntime::default()),
                 current_track: Mutex::new(None),
+                native_strings: Mutex::new(i18n::NativeStrings::default()),
                 spotify: Arc::new(Mutex::new(spotify::Session::default())),
                 shutting_down: AtomicBool::new(false),
             });
 
+            // Base-language labels until the UI calls `set_native_strings`.
+            let labels = i18n::NativeStrings::default();
             let show =
-                tauri::menu::MenuItem::with_id(app, "show", "Abrir UxNow", true, None::<&str>)?;
+                tauri::menu::MenuItem::with_id(app, "show", &labels.tray_show, true, None::<&str>)?;
             let start = tauri::menu::MenuItem::with_id(
                 app,
                 "start",
-                "Iniciar receptor",
+                &labels.tray_start,
                 true,
                 None::<&str>,
             )?;
-            let stop = tauri::menu::MenuItem::with_id(
-                app,
-                "stop",
-                "Detener receptor",
-                true,
-                None::<&str>,
-            )?;
-            let quit = tauri::menu::MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
+            let stop =
+                tauri::menu::MenuItem::with_id(app, "stop", &labels.tray_stop, true, None::<&str>)?;
+            let quit =
+                tauri::menu::MenuItem::with_id(app, "quit", &labels.tray_quit, true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&show, &start, &stop, &quit])?;
-            let mut tray = tauri::tray::TrayIconBuilder::new()
+            let mut tray = tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .tooltip("UxNow · receptor AirPlay");
+                .tooltip(&labels.tray_tooltip);
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
@@ -459,6 +556,12 @@ pub fn run() {
                 _ => {}
             })
             .build(app)?;
+            app.manage(TrayItems {
+                show,
+                start,
+                stop,
+                quit,
+            });
 
             if let Some(window) = app.get_webview_window("main") {
                 if start_minimized {
@@ -491,7 +594,7 @@ pub fn run() {
                         let runtime = audio_app.state::<AppState>().uxplay.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = uxplay::stop(&handle, &runtime).await;
-                            let _ = handle.emit("uxplay://error", uxplay::UxPlayEvent { phase: "error".into(), message: "La salida de UxNow se desconectó. Selecciona otra antes de reconectar AirPlay.".into(), client_id: None, position_ms: None, duration_ms: None });
+                            let _ = handle.emit("uxplay://error", uxplay::UxPlayEvent { phase: "error".into(), message: i18n::msg("backend.uxplay.outputDisconnected"), client_id: None, position_ms: None, duration_ms: None });
                         });
                     }
                     selected_was_available = selected_is_available;
@@ -502,12 +605,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
+            get_uxplay_executable,
             update_config,
             list_audio_devices,
             list_system_fonts,
             start_uxplay,
             get_spotify_link_status,
             start_spotify_link,
+            set_native_strings,
             stop_uxplay,
             restart_uxplay,
             set_stream_volume,

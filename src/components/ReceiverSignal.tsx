@@ -1,13 +1,5 @@
+import { useI18n } from "../i18n";
 import type { ServicePhase } from "../types";
-
-const LABELS: Record<ServicePhase, string> = {
-  stopped: "Receptor detenido",
-  starting: "Iniciando receptor",
-  ready: "Listo para recibir",
-  connecting: "Conectando",
-  streaming: "Recibiendo audio",
-  error: "Error del receptor",
-};
 
 const DOTS = Array.from({ length: 12 }, (_, index) => {
   const angle = (index / 12) * Math.PI * 2 - Math.PI / 2;
@@ -15,8 +7,9 @@ const DOTS = Array.from({ length: 12 }, (_, index) => {
 });
 
 export function ReceiverSignal({ phase }: { phase: ServicePhase }) {
+  const { t } = useI18n();
   return (
-    <div className={`receiver-signal signal-${phase}`} role="img" aria-label={LABELS[phase]}>
+    <div className={`receiver-signal signal-${phase}`} role="img" aria-label={t(`signal.${phase}`)}>
       <svg viewBox="0 0 160 120" aria-hidden="true">
         <g className="signal-dots">{DOTS.map((dot, index) => <circle key={index} cx={dot.cx} cy={dot.cy} r="3.4" />)}</g>
         <g className="signal-waves">

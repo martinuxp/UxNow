@@ -1,6 +1,7 @@
 use crate::{
     audio,
     config::{bundled_gstreamer, discover_uxplay, AppConfig},
+    i18n,
 };
 use serde::Serialize;
 use std::{
@@ -19,6 +20,7 @@ use tokio::{io::AsyncReadExt, process::Child, sync::Mutex};
 #[serde(rename_all = "camelCase")]
 pub struct UxPlayEvent {
     pub phase: String,
+    /// Message descriptor (see `i18n`), or a raw uxPlay log line for errors.
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
@@ -93,7 +95,7 @@ pub async fn start(
         return Ok(());
     }
     let binary = discover_uxplay(&config, &resource_dir)
-        .ok_or("No encontramos uxplay.exe. Selecciónalo en Ajustes o activa el modo demo.")?;
+        .ok_or_else(|| i18n::msg("backend.uxplay.notFound"))?;
     std::fs::create_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
     let metadata = runtime_dir.join("now-playing.txt");
     let cover = runtime_dir.join("cover.jpg");
@@ -102,7 +104,10 @@ pub async fn start(
     emit(
         &app,
         "starting",
-        format!("Iniciando {}…", binary.display()),
+        i18n::msg_with(
+            "backend.uxplay.starting",
+            &[("path", binary.display().to_string())],
+        ),
         None,
         None,
     );
@@ -118,8 +123,12 @@ pub async fn start(
         if let Some(existing) = std::env::var_os("PATH") {
             paths.extend(std::env::split_paths(&existing));
         }
-        let path = std::env::join_paths(paths)
-            .map_err(|error| format!("Ruta del runtime inválida: {error}"))?;
+        let path = std::env::join_paths(paths).map_err(|error| {
+            i18n::msg_with(
+                "backend.uxplay.invalidRuntimePath",
+                &[("error", error.to_string())],
+            )
+        })?;
         command
             .env("PATH", path)
             .env("GST_PLUGIN_PATH_1_0", &gst.plugin_dir)
@@ -130,10 +139,10 @@ pub async fn start(
     }
     let mut child = command
         .spawn()
-        .map_err(|e| format!("No se pudo iniciar uxPlay: {e}"))?;
+        .map_err(|e| i18n::msg_with("backend.uxplay.spawnFailed", &[("error", e.to_string())]))?;
     let pid = child
         .id()
-        .ok_or("uxPlay no informó un identificador de proceso")?;
+        .ok_or_else(|| i18n::msg("backend.uxplay.noProcessId"))?;
     *runtime.process_id.lock().await = Some(pid);
     if let Some(stdout) = child.stdout.take() {
         spawn_log_reader(app.clone(), runtime.clone(), stdout);
@@ -167,7 +176,7 @@ pub async fn start(
                     emit(
                         &monitor_app,
                         "stopped",
-                        "El receptor está detenido".into(),
+                        i18n::msg("backend.uxplay.stopped"),
                         None,
                         None,
                     );
@@ -175,7 +184,7 @@ pub async fn start(
                     emit(
                         &monitor_app,
                         "ready",
-                        "Sesión terminada · uxPlay finalizó".into(),
+                        i18n::msg("backend.uxplay.sessionEndedExited"),
                         None,
                         None,
                     );
@@ -184,8 +193,14 @@ pub async fn start(
                     let detail = diagnostic_from_logs(&logs);
                     drop(logs);
                     let message = match detail {
-                        Some(detail) => format!("uxPlay terminó con {status}: {detail}"),
-                        None => format!("uxPlay terminó con {status}"),
+                        Some(detail) => i18n::msg_with(
+                            "backend.uxplay.exitedWithDetail",
+                            &[("status", status.to_string()), ("detail", detail)],
+                        ),
+                        None => i18n::msg_with(
+                            "backend.uxplay.exited",
+                            &[("status", status.to_string())],
+                        ),
                     };
                     emit(&monitor_app, "error", message, None, None);
                 }
@@ -202,10 +217,9 @@ pub async fn start(
 pub async fn stop(app: &AppHandle, runtime: &UxPlayRuntime) -> Result<(), String> {
     runtime.stopping.store(true, Ordering::Relaxed);
     if let Some(mut child) = runtime.child.lock().await.take() {
-        child
-            .kill()
-            .await
-            .map_err(|e| format!("No se pudo detener uxPlay: {e}"))?;
+        child.kill().await.map_err(|e| {
+            i18n::msg_with("backend.uxplay.stopFailed", &[("error", e.to_string())])
+        })?;
         let _ = child.wait().await;
     }
     *runtime.process_id.lock().await = None;
@@ -213,7 +227,7 @@ pub async fn stop(app: &AppHandle, runtime: &UxPlayRuntime) -> Result<(), String
     emit(
         app,
         "stopped",
-        "El receptor está detenido".into(),
+        i18n::msg("backend.uxplay.stopped"),
         None,
         None,
     );
@@ -249,7 +263,10 @@ where
                     emit(
                         &app,
                         "error",
-                        format!("Error leyendo uxPlay: {error}"),
+                        i18n::msg_with(
+                            "backend.uxplay.readFailed",
+                            &[("error", error.to_string())],
+                        ),
                         None,
                         None,
                     );
@@ -309,7 +326,14 @@ fn emit(
 
 fn emit_event(app: &AppHandle, event: UxPlayEvent) {
     let event_name = match event.phase.as_str() {
-        "ready" if event.message.starts_with("Sesión terminada") => Some("uxplay://session-ended"),
+        "ready"
+            if matches!(
+                i18n::key_of(&event.message).as_deref(),
+                Some("backend.uxplay.sessionEndedExited" | "backend.uxplay.sessionEndedReady")
+            ) =>
+        {
+            Some("uxplay://session-ended")
+        }
         "ready" => Some("uxplay://receiver-ready"),
         "connecting" => Some("uxplay://client-connecting"),
         "streaming" if event.position_ms.is_some() => Some("uxplay://progress"),
@@ -332,7 +356,7 @@ impl UxPlayLogAdapter {
             let duration = field_time(line, "track length");
             return Some(UxPlayEvent {
                 phase: "streaming".into(),
-                message: "Recibiendo audio".into(),
+                message: i18n::msg("backend.uxplay.streaming"),
                 client_id: None,
                 position_ms: Some(position),
                 duration_ms: duration,
@@ -342,22 +366,25 @@ impl UxPlayLogAdapter {
             || lower.contains("uxplay is ready")
             || lower.contains("waiting for connections")
         {
-            return Some(simple("ready", "Listo para recibir"));
+            return Some(simple("ready", i18n::msg("backend.uxplay.ready")));
         }
         if lower.contains("client") && (lower.contains("attempt") || lower.contains("connecting")) {
-            return Some(simple("connecting", "Un dispositivo se está conectando"));
+            return Some(simple("connecting", i18n::msg("backend.uxplay.connecting")));
         }
         if lower.contains("audio connection")
             || lower.contains("raop connection")
             || lower.contains("audio session")
         {
-            return Some(simple("streaming", "Recibiendo audio"));
+            return Some(simple("streaming", i18n::msg("backend.uxplay.streaming")));
         }
         if lower.contains("connection closed")
             || lower.contains("client disconnected")
             || lower.contains("teardown")
         {
-            return Some(simple("ready", "Sesión terminada · listo para recibir"));
+            return Some(simple(
+                "ready",
+                i18n::msg("backend.uxplay.sessionEndedReady"),
+            ));
         }
         if lower.contains("error") || lower.contains("failed") || lower.contains("fatal") {
             return Some(simple("error", line));
@@ -414,6 +441,15 @@ mod tests {
         .unwrap();
         assert_eq!(event.position_ms, Some(62_000));
         assert_eq!(event.duration_ms, Some(182_000));
+    }
+    #[test]
+    fn session_end_is_sent_as_a_translation_key() {
+        let event = UxPlayLogAdapter::parse("Connection closed by client").unwrap();
+        assert_eq!(event.phase, "ready");
+        assert_eq!(
+            i18n::key_of(&event.message).as_deref(),
+            Some("backend.uxplay.sessionEndedReady")
+        );
     }
     #[test]
     fn ignores_irrelevant_log_lines() {

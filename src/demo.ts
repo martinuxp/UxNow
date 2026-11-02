@@ -1,10 +1,11 @@
+import { encodeMessage } from "./i18n/core";
 import { parseTtml } from "./lib/lyrics";
 import type { LyricsCandidate, TrackMetadata } from "./types";
 
 export const DEMO_TRACK: TrackMetadata = {
   title: "Luz de domingo",
   artist: "UxNow Studio",
-  album: "Sesión de demostración",
+  album: encodeMessage("demo.album"),
   durationMs: 84_000,
   coverDataUrl: "/demo-cover.svg",
   isDemo: true,
@@ -53,7 +54,7 @@ export const DEMO_CANDIDATE: LyricsCandidate = {
   format: "ttml",
   content: DEMO_TTML,
   source: "demo",
-  attribution: "Letras: demostración local",
+  attribution: encodeMessage("backend.lyrics.attribution", { source: encodeMessage("demo.lyricsSource") }),
   confidence: 1,
   offsetMs: 0,
 };

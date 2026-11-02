@@ -1,3 +1,4 @@
+use crate::i18n;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use getrandom::fill as random_fill;
 use keyring::Entry;
@@ -44,7 +45,14 @@ impl Default for Session {
 pub struct LinkStatus {
     pub connected: bool,
     pub linking: bool,
+    /// Message descriptor (see `i18n`).
     pub message: String,
+}
+
+/// Text of the page the browser shows after the Spotify redirect, in the UI language.
+pub struct CallbackPages {
+    pub linked: String,
+    pub mismatch: String,
 }
 
 pub type SharedSession = Arc<Mutex<Session>>;
@@ -62,19 +70,25 @@ pub fn status(session: &SharedSession) -> LinkStatus {
     LinkStatus {
         connected,
         linking: session.linking,
-        message: if connected {
-            "Spotify vinculado. La sesión se renueva cuando hace falta.".into()
+        message: i18n::msg(if connected {
+            "backend.spotify.linked"
         } else if session.linking {
-            "Esperando la autorización de Spotify…".into()
+            "backend.spotify.waiting"
         } else {
-            "Vincula Spotify para usar SpicyLyrics.".into()
-        },
+            "backend.spotify.notLinked"
+        }),
     }
 }
 
-pub fn start_link(app: AppHandle, session: SharedSession) -> Result<LinkStatus, String> {
+pub fn start_link(
+    app: AppHandle,
+    session: SharedSession,
+    pages: CallbackPages,
+) -> Result<LinkStatus, String> {
     {
-        let mut guard = session.lock().map_err(|_| "No se pudo iniciar Spotify")?;
+        let mut guard = session
+            .lock()
+            .map_err(|_| i18n::msg("backend.spotify.startFailed"))?;
         if guard.linking {
             drop(guard);
             return Ok(status(&session));
@@ -87,7 +101,7 @@ pub fn start_link(app: AppHandle, session: SharedSession) -> Result<LinkStatus, 
             if let Ok(mut guard) = session.lock() {
                 guard.linking = false;
             }
-            return Err("El puerto de autorización 17846 ya está en uso".into());
+            return Err(i18n::msg("backend.spotify.portInUse"));
         }
     };
     let verifier = verifier()?;
@@ -103,17 +117,22 @@ pub fn start_link(app: AppHandle, session: SharedSession) -> Result<LinkStatus, 
     crate::native_process::command("rundll32.exe")
         .args(["url.dll,FileProtocolHandler", &auth_url])
         .spawn()
-        .map_err(|error| format!("No se pudo abrir Spotify: {error}"))?;
+        .map_err(|error| {
+            i18n::msg_with(
+                "backend.spotify.openFailed",
+                &[("error", error.to_string())],
+            )
+        })?;
 
     let callback_app = app.clone();
     let callback_session = session.clone();
     std::thread::spawn(move || {
-        let result = receive_callback(listener, &state)
+        let result = receive_callback(listener, &state, &pages)
             .and_then(|code| tauri::async_runtime::block_on(exchange_code(&code, &verifier)))
             .and_then(|token| {
                 let refresh_token = token
                     .refresh_token
-                    .ok_or("Spotify no devolvió un refresh token")?;
+                    .ok_or_else(|| i18n::msg("backend.spotify.noRefreshToken"))?;
                 save_refresh_token(&refresh_token)?;
                 let mut guard = callback_session.lock().expect("spotify lock");
                 guard.access_token = Some(token.access_token);
@@ -147,12 +166,14 @@ pub fn start_link(app: AppHandle, session: SharedSession) -> Result<LinkStatus, 
 pub async fn access_token(session: &SharedSession) -> Result<Option<String>, String> {
     let refresh_lock = session
         .lock()
-        .map_err(|_| "No se pudo acceder a Spotify")?
+        .map_err(|_| i18n::msg("backend.spotify.accessFailed"))?
         .refresh_lock
         .clone();
     let _refresh_guard = refresh_lock.lock().await;
     let (access, refresh) = {
-        let mut guard = session.lock().map_err(|_| "No se pudo acceder a Spotify")?;
+        let mut guard = session
+            .lock()
+            .map_err(|_| i18n::msg("backend.spotify.accessFailed"))?;
         if guard
             .expires_at
             .is_some_and(|expires_at| expires_at > Instant::now())
@@ -174,7 +195,9 @@ pub async fn access_token(session: &SharedSession) -> Result<Option<String>, Str
         Ok(token) => {
             let next_refresh = token.refresh_token.unwrap_or(refresh);
             save_refresh_token(&next_refresh)?;
-            let mut guard = session.lock().map_err(|_| "No se pudo acceder a Spotify")?;
+            let mut guard = session
+                .lock()
+                .map_err(|_| i18n::msg("backend.spotify.accessFailed"))?;
             guard.access_token = Some(token.access_token.clone());
             guard.refresh_token = Some(next_refresh);
             guard.expires_at =
@@ -183,7 +206,9 @@ pub async fn access_token(session: &SharedSession) -> Result<Option<String>, Str
         }
         Err(error) if error == "invalid_grant" => {
             let _ = delete_refresh_token();
-            let mut guard = session.lock().map_err(|_| "No se pudo acceder a Spotify")?;
+            let mut guard = session
+                .lock()
+                .map_err(|_| i18n::msg("backend.spotify.accessFailed"))?;
             guard.refresh_token = None;
             guard.access_token = None;
             guard.expires_at = None;
@@ -253,28 +278,32 @@ struct TokenError {
 
 fn token_entry() -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .map_err(|_| "No se pudo abrir el almacén seguro de Windows".into())
+        .map_err(|_| i18n::msg("backend.spotify.vaultOpenFailed"))
 }
 fn load_refresh_token() -> Result<Option<String>, String> {
     match token_entry()?.get_password() {
         Ok(token) => Ok(Some(token)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("No se pudo leer la credencial guardada de Spotify".into()),
+        Err(_) => Err(i18n::msg("backend.spotify.credentialReadFailed")),
     }
 }
 fn save_refresh_token(token: &str) -> Result<(), String> {
     token_entry()?
         .set_password(token)
-        .map_err(|_| "No se pudo guardar Spotify en el almacén seguro de Windows".into())
+        .map_err(|_| i18n::msg("backend.spotify.credentialSaveFailed"))
 }
 fn delete_refresh_token() -> Result<(), String> {
     match token_entry()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("No se pudo borrar la credencial de Spotify".into()),
+        Err(_) => Err(i18n::msg("backend.spotify.credentialDeleteFailed")),
     }
 }
 
-fn receive_callback(listener: TcpListener, expected_state: &str) -> Result<String, String> {
+fn receive_callback(
+    listener: TcpListener,
+    expected_state: &str,
+    pages: &CallbackPages,
+) -> Result<String, String> {
     let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
     let mut request = [0u8; 8192];
     let bytes = stream
@@ -284,25 +313,25 @@ fn receive_callback(listener: TcpListener, expected_state: &str) -> Result<Strin
         .ok()
         .and_then(|value| value.lines().next())
         .and_then(|line| line.split_whitespace().nth(1))
-        .ok_or("Spotify devolvió una respuesta inválida")?;
+        .ok_or_else(|| i18n::msg("backend.spotify.invalidResponse"))?;
     let query = path
         .split_once('?')
         .map(|(_, query)| query)
         .unwrap_or_default();
-    let code = query_value(query, "code").ok_or("No se recibió un código de Spotify")?;
-    let state = query_value(query, "state").ok_or("La respuesta de Spotify no tiene estado")?;
+    let code = query_value(query, "code").ok_or_else(|| i18n::msg("backend.spotify.noCode"))?;
+    let state = query_value(query, "state").ok_or_else(|| i18n::msg("backend.spotify.noState"))?;
     let valid = state == expected_state;
     let page = if valid {
-        "Spotify quedó vinculado. Puedes volver a UxNow."
+        &pages.linked
     } else {
-        "La respuesta de Spotify no coincidió. Vuelve a intentarlo."
+        &pages.mismatch
     };
     let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><title>UxNow</title><body style=\"font-family:Segoe UI,system-ui;padding:3rem;background:#10131a;color:#eef1f7\">{page}</body>");
     let _ = stream.write_all(response.as_bytes());
     if valid {
         Ok(code)
     } else {
-        Err("La respuesta de Spotify no pasó la validación de seguridad".into())
+        Err(i18n::msg("backend.spotify.securityCheckFailed"))
     }
 }
 

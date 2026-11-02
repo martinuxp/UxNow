@@ -1,3 +1,4 @@
+import { encodeMessage } from "../i18n/core";
 import type { FontChoice } from "../types";
 
 export const DEFAULT_UI_FONT = "Google Sans Flex";
@@ -24,11 +25,11 @@ const ALIASES: Record<string, string> = {
 };
 
 const LABELS: Record<string, string> = {
-  system: "Google Sans Flex · predeterminada",
+  system: encodeMessage("fonts.systemDefault"),
   "Google Sans Flex": "Google Sans Flex · variable",
   "Google Sans Flex SemiBold": "Google Sans Flex · semibold",
   "Google Sans Flex Bold": "Google Sans Flex · bold",
-  "windows-system": "Fuente de Windows · Segoe UI",
+  "windows-system": encodeMessage("fonts.windowsSystem"),
   humanist: "Aptos",
   geometric: "Bahnschrift",
   serif: "Georgia",
@@ -64,6 +65,7 @@ export function fontFaceFor(choice: FontChoice | undefined) {
   };
 }
 
+/** Display name; may be a message descriptor, so render it through `tm`. */
 export const fontLabel = (choice: FontChoice) => LABELS[choice] ?? choice;
 
 export const fontFamilyFor = (choice: FontChoice | undefined) => {

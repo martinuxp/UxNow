@@ -47,7 +47,8 @@ distributions and package metadata. The generated inventory is included as
 
 ## Online lyric services
 
-BiniLyrics, Unison, LRCLIB, and (when configured) SpicyLyrics are external services.
+BiniLyrics, Unison, LRCLIB, SpicyLyrics, and the ListenBrainz Labs lookup used to find
+Spotify track IDs for SpicyLyrics are external services.
 Their results keep their source attribution in the interface. UxNow never
 uploads a local lyric file and makes no online request until the user grants
 consent.

@@ -6,6 +6,7 @@ import { DeviceName } from "../components/DeviceName";
 import { LyricsView } from "../components/LyricsView";
 import { StatusPill } from "../components/StatusPill";
 import { UxSelect } from "../components/UiControls";
+import { decodeMessage, encodeMessage, errorText, useI18n, type MessageKey } from "../i18n";
 import { command, isTauri } from "../lib/tauri";
 import { parseLyrics } from "../lib/lyrics";
 import { lyricsPlaybackTime } from "../lib/lyricsTiming";
@@ -13,12 +14,21 @@ import { lyricsSessionKey } from "../lib/trackIdentity";
 import { useAppStore } from "../store";
 import type { LyricsCandidate } from "../types";
 
-const candidateFileName = (path?: string) => path?.split(/[\\/]/).pop() ?? "Archivo local";
-const syncLabel = (syncType: string) => syncType === "word" ? "Palabra a palabra" : syncType === "line" ? "Sincronizada por línea" : "Letra estática";
-const sourceLabel = (source: string) => ({ local: "Archivo local", binimum: "BiniLyrics", unison: "Unison", lrclib: "LRCLIB", spicylyrics: "SpicyLyrics" }[source.toLowerCase()] ?? source);
+/** Placeholder artist set by src-tauri/src/metadata.rs; it stays in Spanish because lyrics lookups use it. */
+const UNKNOWN_ARTIST = "Artista desconocido";
+const candidateFileName = (path?: string) => path?.split(/[\\/]/).pop();
+const syncLabel = (syncType: string): MessageKey => syncType === "word" ? "lyrics.sync.word" : syncType === "line" ? "lyrics.sync.line" : "lyrics.sync.static";
+const sourceName = (source: string) => ({ binimum: "BiniLyrics", unison: "Unison", lrclib: "LRCLIB", spicylyrics: "SpicyLyrics" }[source.toLowerCase()] ?? source);
+/** The attribution without its "Lyrics:" prefix, also for Spanish text cached by older versions. */
+const attributionSource = (attribution: string, tm: (raw: string) => string) => {
+  const descriptor = decodeMessage(attribution);
+  const source = descriptor?.key === "backend.lyrics.attribution" ? descriptor.params?.source : undefined;
+  return typeof source === "string" ? tm(source) : tm(attribution).replace(/^Letras:\s*/i, "");
+};
 
 export function NowPlayingPage() {
   const { track, lyrics, lyricLines, lyricsState, lyricsError, positionMs, config, devices, patchConfig, setService, sessionLyricsOffsets, setSessionLyricsOffset } = useAppStore();
+  const { t, tm } = useI18n();
   const [alternatives, setAlternatives] = useState<LyricsCandidate[] | null>(null);
   const [loadingAlternatives, setLoadingAlternatives] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
@@ -26,11 +36,12 @@ export function NowPlayingPage() {
   const [volume, setVolumeValue] = useState(0.8);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [pinned, setPinned] = useState(false);
   const [pendingOutput, setPendingOutput] = useState<string | null>(null);
   const controlsTimer = useRef<number | undefined>(undefined);
   const offset = track ? (sessionLyricsOffsets[lyricsSessionKey(track)] ?? 0) : 0;
   const selected = devices.find((device) => device.id === config.preferredAudioDeviceId);
-  const outputOptions = devices.map((device) => ({ id: device.id, label: device.name, description: device.isDefault ? "Predeterminado de Windows" : undefined }));
+  const outputOptions = devices.map((device) => ({ id: device.id, label: tm(device.name), description: device.isDefault ? t("nowPlaying.windowsDefault") : undefined }));
 
   const setFullscreenMode = useCallback(async (next: boolean) => {
     if (isTauri()) await getCurrentWindow().setFullscreen(next);
@@ -54,6 +65,7 @@ export function NowPlayingPage() {
     const windowRef = getCurrentWindow();
     let dispose: (() => void) | undefined;
     void windowRef.isFullscreen().then(setIsFullscreen);
+    void windowRef.isAlwaysOnTop().then(setPinned);
     void windowRef.onResized(async () => setIsFullscreen(await windowRef.isFullscreen())).then((unlisten) => { dispose = unlisten; });
     return () => dispose?.();
   }, []);
@@ -71,7 +83,7 @@ export function NowPlayingPage() {
 
   if (!track) return (
     <main className="page empty-now-playing">
-      <div className="empty-disc"><span /></div><h1>Esperando música</h1><p>Conecta un dispositivo por AirPlay y aquí aparecerán la portada y las letras.</p>
+      <div className="empty-disc"><span /></div><h1>{t("nowPlaying.waitingTitle")}</h1><p>{t("nowPlaying.waitingBody")}</p>
     </main>
   );
 
@@ -80,7 +92,7 @@ export function NowPlayingPage() {
     patchConfig({ preferredAudioDeviceId: deviceId });
     if (!isTauri() || track.isDemo) return;
     try { await command("update_config", { patch: { preferredAudioDeviceId: deviceId } }); await command("restart_uxplay"); }
-    catch (error) { setService("error", String(error)); }
+    catch (error) { setService("error", errorText(error)); }
   };
 
   const requestOutput = (deviceId: string) => {
@@ -89,9 +101,9 @@ export function NowPlayingPage() {
   };
 
   const togglePin = async () => {
-    if (!isTauri()) return;
-    const windowRef = getCurrentWindow();
-    await windowRef.setAlwaysOnTop(!(await windowRef.isAlwaysOnTop()));
+    const next = !pinned;
+    if (isTauri()) await getCurrentWindow().setAlwaysOnTop(next);
+    setPinned(next);
   };
 
   const changeVolume = async (value: number) => {
@@ -104,7 +116,7 @@ export function NowPlayingPage() {
     if (track.isDemo) { setAlternatives(lyrics ? [lyrics] : []); return; }
     setLoadingAlternatives(true);
     try { setAlternatives(await command<LyricsCandidate[]>("search_lyrics_alternatives", { track })); }
-    catch (error) { setService("error", String(error)); }
+    catch (error) { setService("error", errorText(error)); }
     finally { setLoadingAlternatives(false); }
   };
 
@@ -117,12 +129,14 @@ export function NowPlayingPage() {
       useAppStore.getState().setLyrics(candidate, lines);
       setAlternatives(null);
     } catch (error) {
-      setSelectionError("No se pudo guardar esta letra: " + String(error));
+      setSelectionError(encodeMessage("nowPlaying.picker.saveFailed", { error: errorText(error) }));
     } finally {
       setSavingSelection(false);
     }
   };
 
+  const artist = track.artist === UNKNOWN_ARTIST ? t("track.unknownArtist") : track.artist;
+  const album = track.album && tm(track.album);
   const durationMs = Math.max(track.durationMs ?? lyrics?.durationMs ?? 0, 1);
   const progress = Math.min(1, Math.max(0, positionMs / durationMs));
   const formatTime = (milliseconds: number) => {
@@ -131,34 +145,34 @@ export function NowPlayingPage() {
   };
 
   return (
-    <main className={`page now-playing${isFullscreen ? " is-fullscreen" : ""}${isFullscreen && !controlsVisible ? " controls-hidden" : ""}`} style={{ "--cover": `url(${track.coverDataUrl ?? "/demo-cover.svg"})` } as React.CSSProperties} onPointerMove={revealControls} onPointerDown={revealControls}>
+    <main data-theme="dark" className={`page now-playing dark${isFullscreen ? " is-fullscreen" : ""}${isFullscreen && !controlsVisible ? " controls-hidden" : ""}`} style={{ "--cover": `url(${track.coverDataUrl ?? "/demo-cover.svg"})` } as React.CSSProperties} onPointerMove={revealControls} onPointerDown={revealControls}>
       <div className="ambient" aria-hidden="true" />
       <header className="now-toolbar">
-        <div className="toolbar-status"><StatusPill phase="streaming" demo={track.isDemo} /><span>F para {isFullscreen ? "salir" : "pantalla completa"}</span></div>
-        <div className="toolbar-actions"><Button variant="secondary" onPress={togglePin}><Pin size={16} />Mantener encima</Button><Button isIconOnly variant="secondary" aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} onPress={() => void setFullscreenMode(!isFullscreen)}>{isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</Button></div>
+        <div className="toolbar-status"><StatusPill phase="streaming" demo={track.isDemo} /><span>{t(isFullscreen ? "nowPlaying.hintExitFullscreen" : "nowPlaying.hintEnterFullscreen")}</span></div>
+        <div className="toolbar-actions"><Button variant="secondary" className={`pin-toggle${pinned ? " is-on" : ""}`} aria-pressed={pinned} onPress={() => void togglePin()}><Pin size={16} fill={pinned ? "currentColor" : "none"} />{t("nowPlaying.keepOnTop")}</Button><Button isIconOnly variant="secondary" aria-label={t(isFullscreen ? "nowPlaying.exitFullscreen" : "nowPlaying.enterFullscreen")} onPress={() => void setFullscreenMode(!isFullscreen)}>{isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</Button></div>
       </header>
 
       <div className="player-layout">
         <section className="track-column">
-          <div className="cover-stage"><img className="cover" src={track.coverDataUrl ?? "/demo-cover.svg"} alt={`Portada de ${track.title}`} /></div>
-          <div className="cinema-progress" role="progressbar" aria-label="Progreso de la canción" aria-valuemin={0} aria-valuemax={durationMs} aria-valuenow={Math.round(positionMs)}><time>{formatTime(positionMs)}</time><span><i style={{ transform: `scaleX(${progress})` }} /></span><time>{formatTime(durationMs)}</time></div>
-          <div className="track-copy"><p className="airplay-label"><i />AirPlay{track.isDemo ? " · Demo" : ""}</p><h1 title={track.title}>{track.title}</h1><h2 title={track.artist}>{track.artist}</h2>{track.album && <p title={track.album}>{track.album}</p>}</div>
+          <div className="cover-stage"><img className="cover" src={track.coverDataUrl ?? "/demo-cover.svg"} alt={t("nowPlaying.coverAlt", { title: track.title })} /></div>
+          <div className="cinema-progress" role="progressbar" aria-label={t("nowPlaying.progress")} aria-valuemin={0} aria-valuemax={durationMs} aria-valuenow={Math.round(positionMs)}><time>{formatTime(positionMs)}</time><span><i style={{ transform: `scaleX(${progress})` }} /></span><time>{formatTime(durationMs)}</time></div>
+          <div className="track-copy"><p className="airplay-label"><i />AirPlay{track.isDemo ? ` · ${t("nowPlaying.demoTag")}` : ""}</p><h1 title={track.title}>{track.title}</h1><h2 title={artist}>{artist}</h2>{album && <p title={album}>{album}</p>}</div>
           <Card className="playback-tools ux-card" variant="secondary"><Card.Content>
-            <div className="output-select"><Speaker size={18} /><span><small>Salida de AirPlay</small><strong><DeviceName name={selected?.name ?? "Sin seleccionar"} /></strong></span><UxSelect value={config.preferredAudioDeviceId ?? ""} options={outputOptions} label="Salida de audio" placeholder="Seleccionar" onChange={requestOutput} /></div>
-            <div className="volume-control"><Volume2 size={18} /><Slider aria-label="Volumen del stream" minValue={0} maxValue={1} step={0.01} value={volume} onChange={(value) => void changeVolume(Number(value))}><Slider.Track><Slider.Fill /><Slider.Thumb /></Slider.Track></Slider></div>
+            <div className="output-select"><Speaker size={18} /><span><small>{t("nowPlaying.output")}</small><strong><DeviceName name={selected ? tm(selected.name) : t("nowPlaying.outputUnselected")} /></strong></span><UxSelect value={config.preferredAudioDeviceId ?? ""} options={outputOptions} label={t("nowPlaying.outputSelect")} onChange={requestOutput} /></div>
+            <div className="volume-control"><Volume2 size={18} /><Slider aria-label={t("nowPlaying.volume")} minValue={0} maxValue={1} step={0.01} value={volume} onChange={(value) => void changeVolume(Number(value))}><Slider.Track><Slider.Fill /><Slider.Thumb /></Slider.Track></Slider></div>
           </Card.Content></Card>
         </section>
 
-        <Card className="lyrics-column ux-card" variant="secondary" aria-label="Letras sincronizadas"><Card.Content>
-          <div className="lyrics-heading"><span className="lyrics-source">{lyrics?.attribution ?? "Buscando letra"}{lyrics?.attributionLinks?.map((link) => <span key={link.url}> · <a href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a></span>)}</span><Button size="sm" variant="ghost" onPress={showAlternatives} isDisabled={loadingAlternatives} isPending={loadingAlternatives}>{loadingAlternatives ? <LoaderCircle className="spin" size={16} /> : <SlidersHorizontal size={16} />}Cambiar letra</Button></div>
+        <Card className="lyrics-column ux-card" variant="secondary" aria-label={t("nowPlaying.lyricsRegion")}><Card.Content>
+          <div className="lyrics-heading"><span className="lyrics-source">{lyrics ? tm(lyrics.attribution) : t("nowPlaying.searchingLyrics")}{lyrics?.attributionLinks?.map((link) => <span key={link.url}> · <a href={link.url} target="_blank" rel="noopener noreferrer">{tm(link.label)}</a></span>)}</span><Button size="sm" variant="ghost" onPress={showAlternatives} isDisabled={loadingAlternatives} isPending={loadingAlternatives}>{loadingAlternatives ? <LoaderCircle className="spin" size={16} /> : <SlidersHorizontal size={16} />}{t("nowPlaying.changeLyrics")}</Button></div>
           <LyricsView lines={lyricLines} currentTime={lyricsPlaybackTime(positionMs, offset, config.globalLyricsOffsetMs)} state={lyricsState} cinema={isFullscreen} fontFamily={config.lyricsFont} errorMessage={lyricsError} />
-          {lyrics && <div className="offset-row"><span>Esta canción</span><Slider aria-label="Offset de esta canción durante la sesión" minValue={-1000} maxValue={1000} step={50} value={offset} onChange={(value) => setSessionLyricsOffset(track, Number(value))}><Slider.Track><Slider.Fill /><Slider.Thumb /></Slider.Track></Slider><output>{offset >= 0 ? "+" : ""}{(offset / 1000).toFixed(2)} s</output></div>}
+          {lyrics && <div className="offset-row"><span>{t("nowPlaying.thisSong")}</span><Slider className="offset-slider" aria-label={t("nowPlaying.sessionOffset")} minValue={-1000} maxValue={1000} step={50} value={offset} onChange={(value) => setSessionLyricsOffset(track, Number(value))}><Slider.Track><Slider.Fill /><Slider.Thumb /></Slider.Track></Slider><output>{offset >= 0 ? "+" : ""}{(offset / 1000).toFixed(2)} s</output></div>}
         </Card.Content></Card>
       </div>
 
-      <Modal><Modal.Backdrop variant="blur" isOpen={alternatives !== null} onOpenChange={(open) => { if (!open) setAlternatives(null); }}><Modal.Container size="md"><Modal.Dialog className="lyrics-picker"><Modal.CloseTrigger /><Modal.Header><Modal.Heading>Cambiar letra</Modal.Heading></Modal.Header><Modal.Body><p className="picker-description">Elige un archivo o una fuente. UxNow recordará tu elección para esta canción.</p>{selectionError && <p role="alert" className="picker-description">{selectionError}</p>}<div className="candidate-list">{alternatives?.map((candidate) => <Button variant={candidate.id === lyrics?.id ? "secondary" : "ghost"} className={candidate.id === lyrics?.id ? "is-selected" : ""} key={candidate.id} isDisabled={savingSelection} onPress={() => void selectLyrics(candidate)}><span className="candidate-copy"><span className="candidate-source">{sourceLabel(candidate.source)}</span><strong>{candidate.source === "local" ? candidateFileName(candidate.sourceUrl) : candidate.attribution.replace(/^Letras:\s*/i, "")}</strong><small>{syncLabel(candidate.syncType)} · {candidate.format.toUpperCase()} · {Math.round(candidate.confidence * 100)}% de coincidencia</small>{candidate.source === "local" && <small className="candidate-path" title={candidate.sourceUrl}>{candidate.sourceUrl}</small>}</span>{candidate.id === lyrics?.id && <Check size={17} aria-label="Letra actual" />}</Button>)}{alternatives?.length === 0 && <p className="no-candidates">No hay otra letra disponible para esta canción.</p>}</div></Modal.Body></Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>
+      <Modal><Modal.Backdrop variant="blur" isOpen={alternatives !== null} onOpenChange={(open) => { if (!open) setAlternatives(null); }}><Modal.Container size="md"><Modal.Dialog className="lyrics-picker"><Modal.CloseTrigger /><Modal.Header><Modal.Heading>{t("nowPlaying.picker.title")}</Modal.Heading></Modal.Header><Modal.Body><p className="picker-description">{t("nowPlaying.picker.description")}</p>{selectionError && <p role="alert" className="picker-description">{tm(selectionError)}</p>}<div className="candidate-list">{alternatives?.map((candidate) => <Button variant={candidate.id === lyrics?.id ? "secondary" : "ghost"} className={candidate.id === lyrics?.id ? "is-selected" : ""} key={candidate.id} isDisabled={savingSelection} onPress={() => void selectLyrics(candidate)}><span className="candidate-copy"><span className="candidate-source">{candidate.source.toLowerCase() === "local" ? t("lyrics.localFile") : sourceName(candidate.source)}</span><strong>{candidate.source === "local" ? candidateFileName(candidate.sourceUrl) ?? t("lyrics.localFile") : attributionSource(candidate.attribution, tm)}</strong><small>{t(syncLabel(candidate.syncType))} · {candidate.format.toUpperCase()} · {t("nowPlaying.picker.match", { percent: Math.round(candidate.confidence * 100) })}</small>{candidate.source === "local" && <small className="candidate-path" title={candidate.sourceUrl}>{candidate.sourceUrl}</small>}</span>{candidate.id === lyrics?.id && <Check size={17} aria-label={t("nowPlaying.picker.current")} />}</Button>)}{alternatives?.length === 0 && <p className="no-candidates">{t("nowPlaying.picker.empty")}</p>}</div></Modal.Body></Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>
 
-      <AlertDialog><AlertDialog.Backdrop variant="blur" isOpen={Boolean(pendingOutput)} onOpenChange={(open) => { if (!open) setPendingOutput(null); }}><AlertDialog.Container size="sm"><AlertDialog.Dialog><AlertDialog.Header><AlertDialog.Icon status="warning"><Speaker size={20} /></AlertDialog.Icon><AlertDialog.Heading>Cambiar la salida de AirPlay</AlertDialog.Heading></AlertDialog.Header><AlertDialog.Body><p>UxNow reiniciará el receptor. Después tendrás que volver a conectar AirPlay desde tu dispositivo.</p></AlertDialog.Body><AlertDialog.Footer><Button variant="tertiary" onPress={() => setPendingOutput(null)}>Cancelar</Button><Button onPress={() => pendingOutput && void applyOutput(pendingOutput)}>Cambiar salida</Button></AlertDialog.Footer></AlertDialog.Dialog></AlertDialog.Container></AlertDialog.Backdrop></AlertDialog>
+      <AlertDialog><AlertDialog.Backdrop variant="blur" isOpen={Boolean(pendingOutput)} onOpenChange={(open) => { if (!open) setPendingOutput(null); }}><AlertDialog.Container size="sm"><AlertDialog.Dialog><AlertDialog.Header><AlertDialog.Icon status="warning"><Speaker size={20} /></AlertDialog.Icon><AlertDialog.Heading>{t("nowPlaying.outputDialog.title")}</AlertDialog.Heading></AlertDialog.Header><AlertDialog.Body><p>{t("nowPlaying.outputDialog.body")}</p></AlertDialog.Body><AlertDialog.Footer><Button variant="tertiary" onPress={() => setPendingOutput(null)}>{t("common.cancel")}</Button><Button onPress={() => pendingOutput && void applyOutput(pendingOutput)}>{t("nowPlaying.outputDialog.confirm")}</Button></AlertDialog.Footer></AlertDialog.Dialog></AlertDialog.Container></AlertDialog.Backdrop></AlertDialog>
     </main>
   );
 }

@@ -35,6 +35,13 @@ if ($sourceText -notmatch 'memcpy\(proof,\s*client_proof,\s*sizeof\(proof\)\)' -
     throw "El checkout de uxPlay no contiene las tres correcciones del aviso GHSA-479c-ww7g-wgp8."
 }
 
+# WinSock 1 (wsock32) reads WinSock 2 option numbers differently: IP_MULTICAST_IF
+# is ignored and mDNS replies leave through the lowest-metric adapter (VPN, VM).
+$uxplayBytes = [IO.File]::ReadAllBytes($uxplay)
+if ([Text.Encoding]::ASCII.GetString($uxplayBytes) -match '(?i)wsock32\.dll') {
+    throw 'uxplay.exe importa wsock32.dll. Aplica patches/uxplay y recompila antes de empaquetar.'
+}
+
 $manifest = Join-Path $runtime 'RUNTIME_SOURCES.md'
 $msysLicenses = Join-Path $runtime 'licenses\MSYS2'
 $uxplayLicense = Join-Path $runtime 'licenses\uxPlay\LICENSE'

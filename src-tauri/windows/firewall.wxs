@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:fire="http://schemas.microsoft.com/wix/FirewallExtension">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="UxNowAirPlayFirewall" Guid="*" Win64="yes">
+        <RegistryValue Root="HKLM" Key="Software\UxNow" Name="AirPlayFirewall" Type="integer" Value="1" KeyPath="yes" />
+        <fire:FirewallException Id="UxNowAirPlayPrivate"
+                                Name="UxNow AirPlay (Private)"
+                                Description="Permite recibir audio AirPlay en UxNow desde la red local privada."
+                                Program="[INSTALLDIR]_internal\bin\uxplay.exe"
+                                Profile="private"
+                                Scope="localSubnet"
+                                IgnoreFailure="no" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

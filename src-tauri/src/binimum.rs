@@ -55,32 +55,32 @@ pub async fn find(
         .await
         .map_err(|error| {
             if error.is_timeout() {
-                "BiniLyrics no respondió dentro del tiempo límite".to_string()
+                crate::i18n::msg("backend.binimum.timeout")
             } else {
-                "No se pudo conectar con BiniLyrics".to_string()
+                crate::i18n::msg("backend.binimum.unreachable")
             }
         })?;
     if response.status() == StatusCode::NO_CONTENT {
         return Ok(None);
     }
     if !response.status().is_success() {
-        return Err(format!(
-            "BiniLyrics respondió HTTP {}",
-            response.status().as_u16()
+        return Err(crate::i18n::msg_with(
+            "backend.binimum.httpStatus",
+            &[("status", response.status().as_u16().to_string())],
         ));
     }
     let response: SearchResponse = response
         .json()
         .await
-        .map_err(|_| "BiniLyrics devolvió una respuesta JSON inválida".to_string())?;
+        .map_err(|_| crate::i18n::msg("backend.binimum.invalidJson"))?;
     let Some((result, confidence)) = best_match(track, response.results) else {
         return Ok(None);
     };
 
     let lyrics_url = Url::parse(&result.lyrics_url)
-        .map_err(|_| "BiniLyrics devolvió una URL de letra inválida".to_string())?;
+        .map_err(|_| crate::i18n::msg("backend.binimum.invalidUrl"))?;
     if lyrics_url.scheme() != "https" || lyrics_url.host_str() != Some(STORAGE_HOST) {
-        return Err("BiniLyrics devolvió un origen de letra no permitido".into());
+        return Err(crate::i18n::msg("backend.binimum.disallowedOrigin"));
     }
 
     let lyrics_response = client
@@ -94,19 +94,19 @@ pub async fn find(
         .content_length()
         .is_some_and(|size| size > MAX_TTML_BYTES as u64)
     {
-        return Err("La letra de BiniLyrics supera el límite de 2 MB".into());
+        return Err(crate::i18n::msg("backend.binimum.tooLarge"));
     }
     let bytes = lyrics_response
         .bytes()
         .await
         .map_err(|error| error.to_string())?;
     if bytes.len() > MAX_TTML_BYTES {
-        return Err("La letra de BiniLyrics supera el límite de 2 MB".into());
+        return Err(crate::i18n::msg("backend.binimum.tooLarge"));
     }
     let content = String::from_utf8(bytes.to_vec())
-        .map_err(|_| "BiniLyrics devolvió una letra que no es UTF-8".to_string())?;
+        .map_err(|_| crate::i18n::msg("backend.binimum.notUtf8"))?;
     if !content.trim_start().starts_with("<tt") || !content.contains("</tt>") {
-        return Err("BiniLyrics devolvió un TTML incompleto".into());
+        return Err(crate::i18n::msg("backend.binimum.incompleteTtml"));
     }
 
     let sync_type = match result.timing_type.as_deref() {
@@ -130,7 +130,7 @@ pub async fn find(
         content,
         translation: None,
         source: "binimum".into(),
-        attribution: "Letras: BiniLyrics · lyrics.binimum.org".into(),
+        attribution: crate::lyrics::attribution("BiniLyrics · lyrics.binimum.org".into()),
         attribution_links: Vec::new(),
         source_url: Some(lyrics_url.to_string()),
         confidence,
@@ -145,7 +145,12 @@ pub async fn diagnose() -> (bool, String) {
         .build()
     {
         Ok(client) => client,
-        Err(_) => return (false, "No se pudo preparar la conexión".into()),
+        Err(_) => {
+            return (
+                false,
+                crate::i18n::msg("backend.diagnostics.binimumSetupFailed"),
+            )
+        }
     };
 
     match client
@@ -156,21 +161,30 @@ pub async fn diagnose() -> (bool, String) {
     {
         Ok(response) if response.status().is_success() => {
             match response.json::<SearchResponse>().await {
-                Ok(_) => (true, "API disponible".into()),
-                Err(_) => (false, "El API respondió con un formato inesperado".into()),
+                Ok(_) => (
+                    true,
+                    crate::i18n::msg("backend.diagnostics.binimumAvailable"),
+                ),
+                Err(_) => (
+                    false,
+                    crate::i18n::msg("backend.diagnostics.binimumBadFormat"),
+                ),
             }
         }
         Ok(response) => (
             false,
-            format!(
-                "HTTP {} en lyrics-api.binimum.org",
-                response.status().as_u16()
+            crate::i18n::msg_with(
+                "backend.diagnostics.binimumHttp",
+                &[("status", response.status().as_u16().to_string())],
             ),
         ),
-        Err(error) if error.is_timeout() => (false, "El API no respondió en 6 segundos".into()),
+        Err(error) if error.is_timeout() => (
+            false,
+            crate::i18n::msg("backend.diagnostics.binimumTimeout"),
+        ),
         Err(_) => (
             false,
-            "No se pudo conectar con lyrics-api.binimum.org".into(),
+            crate::i18n::msg("backend.diagnostics.binimumUnreachable"),
         ),
     }
 }

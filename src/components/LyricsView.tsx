@@ -3,13 +3,15 @@ import { Spinner } from "@heroui/react";
 import { useEffect, useMemo, useState } from "react";
 import { toAmllLines } from "../lib/lyrics";
 import { fontFamilyFor, fontStyleFor, fontWeightFor } from "../lib/fonts";
+import { messageMentions, useI18n, type MessageKey } from "../i18n";
+import { LyricsRenderBoundary } from "./LyricsRenderBoundary";
 import type { LyricLine } from "../types";
 
-const BINI_404_MESSAGES = [
-  "Parece que hoy te toca aprendértela de memoria.",
-  "Hmm, creo que esta no la tenemos.",
-  "Esta vez va sin letra, para la proxima.",
-  "¿Te la sabes? Esta letra no la tenemos.",
+const BINI_404_MESSAGES: MessageKey[] = [
+  "lyrics.missingJokes.memorize",
+  "lyrics.missingJokes.notHere",
+  "lyrics.missingJokes.nextTime",
+  "lyrics.missingJokes.knowIt",
 ];
 let nextBini404Message = 0;
 
@@ -25,28 +27,27 @@ interface LyricsViewProps {
 export function LyricsView({ lines, currentTime, state, cinema = false, fontFamily = "system", errorMessage }: LyricsViewProps) {
   const amllLines = useMemo(() => toAmllLines(lines), [lines]);
   const isPortrait = useMediaQuery("(max-aspect-ratio: 9 / 10)");
+  // Reduced motion keeps line-by-line scrolling but drops the spring overshoot and scaling.
+  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const resolvedFontFamily = fontFamilyFor(fontFamily);
   const resolvedFontWeight = fontWeightFor(fontFamily, 600);
   const resolvedFontStyle = fontStyleFor(fontFamily);
-  const [friendlyError, setFriendlyError] = useState("");
-  const isBini404 = errorMessage?.includes("BiniLyrics respondió HTTP 404") ?? false;
+  const { t, tm } = useI18n();
+  const [friendlyError, setFriendlyError] = useState<MessageKey | null>(null);
+  const isBini404 = messageMentions(errorMessage, "backend.binimum.httpStatus", { status: 404 });
 
   useEffect(() => {
-    if (isBini404) {
-      setFriendlyError(BINI_404_MESSAGES[nextBini404Message++ % BINI_404_MESSAGES.length]);
-    } else {
-      setFriendlyError(errorMessage ?? "");
-    }
+    setFriendlyError(isBini404 ? BINI_404_MESSAGES[nextBini404Message++ % BINI_404_MESSAGES.length] : null);
   }, [errorMessage, isBini404]);
 
-  if (state === "searching") return <div className="lyrics-empty"><Spinner size="md" color="accent" /><p>Buscando letras…</p><span>Consultando fuentes.</span></div>;
-  if (state === "not-found") return <div className="lyrics-empty"><p>No hay letras para esta canción.</p><span>Suelta aquí un archivo TTML, LRC o ELRC para usarlo.</span></div>;
-  if (state === "error") return <div className="lyrics-empty"><p>{isBini404 ? friendlyError : "No se pudo cargar la letra."}</p>{!isBini404 && <span>{errorMessage || "El audio seguirá reproduciéndose."}</span>}</div>;
-  if (!lines.length) return <div className="lyrics-empty"><p>Sin letra por ahora.</p><span>Buscaremos cuando cambie la canción.</span></div>;
+  if (state === "searching") return <div className="lyrics-empty"><Spinner size="md" color="accent" /><p>{t("lyrics.searching")}</p><span>{t("lyrics.searchingDetail")}</span></div>;
+  if (state === "not-found") return <div className="lyrics-empty"><p>{t("lyrics.notFound")}</p><span>{t("lyrics.notFoundDetail")}</span></div>;
+  if (state === "error") return <div className="lyrics-empty"><p>{isBini404 ? (friendlyError ? t(friendlyError) : "") : t("lyrics.loadFailed")}</p>{!isBini404 && <span>{tm(errorMessage) || t("lyrics.loadFailedDetail")}</span>}</div>;
+  if (!lines.length) return <div className="lyrics-empty"><p>{t("lyrics.empty")}</p><span>{t("lyrics.emptyDetail")}</span></div>;
 
   return (
     <div className={`amll-shell${cinema ? " amll-cinema" : ""}`} style={{ fontFamily: resolvedFontFamily, fontWeight: resolvedFontWeight, fontStyle: resolvedFontStyle, "--lyrics-font-weight": resolvedFontWeight } as React.CSSProperties}>
-      <LyricPlayer
+      <LyricsRenderBoundary lines={lines}><LyricPlayer
         key={`${resolvedFontFamily}-${resolvedFontWeight}-${resolvedFontStyle}`}
         style={{ fontFamily: resolvedFontFamily, fontWeight: resolvedFontWeight, fontStyle: resolvedFontStyle }}
         lyricLines={amllLines}
@@ -54,10 +55,10 @@ export function LyricsView({ lines, currentTime, state, cinema = false, fontFami
         playing
         alignAnchor="center"
         alignPosition={cinema && isPortrait ? 0.28 : cinema ? 0.46 : 0.42}
-        enableSpring
+        enableSpring={!reduceMotion}
         enableBlur
-        enableScale
-      />
+        enableScale={!reduceMotion}
+      /></LyricsRenderBoundary>
     </div>
   );
 }

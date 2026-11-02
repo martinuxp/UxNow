@@ -1,4 +1,4 @@
-use crate::{config::AppConfig, metadata::TrackMetadata};
+use crate::{config::AppConfig, i18n, metadata::TrackMetadata};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -179,7 +179,7 @@ pub fn remove_library_entry(db: &Path, id: i64) -> Result<Vec<LibraryEntry>, Str
         .query_row("SELECT path FROM library WHERE id=?1", [id], |row| {
             row.get::<_, String>(0)
         })
-        .map_err(|_| "La letra ya no está en la biblioteca".to_string())?;
+        .map_err(|_| i18n::msg("backend.lyrics.notInLibrary"))?;
     conn.execute(
         "INSERT INTO ignored_library(path) VALUES(?1) ON CONFLICT(path) DO UPDATE SET ignored_at=unixepoch()",
         [&path],
@@ -227,18 +227,18 @@ fn remove_candidates_for_path(conn: &Connection, path: &str) -> Result<(), Strin
 
 fn validate_file(path: &Path, format: &str, size: u64) -> Result<(), String> {
     if size > 2 * 1024 * 1024 {
-        return Err("El archivo supera el límite de 2 MB".into());
+        return Err(i18n::msg("backend.lyrics.fileTooLarge"));
     }
-    let text = fs::read_to_string(path).map_err(|_| "No se pudo leer como UTF-8".to_string())?;
+    let text = fs::read_to_string(path).map_err(|_| i18n::msg("backend.lyrics.notUtf8"))?;
     if format == "ttml" && !(text.contains("<tt") && text.contains("</tt>")) {
-        return Err("TTML incompleto o inválido".into());
+        return Err(i18n::msg("backend.lyrics.invalidTtml"));
     }
     if matches!(format, "lrc" | "elrc")
         && !text
             .lines()
             .any(|line| line.contains('[') && line.contains(']'))
     {
-        return Err("No contiene marcas de tiempo reconocibles".into());
+        return Err(i18n::msg("backend.lyrics.noTimestamps"));
     }
     Ok(())
 }
@@ -254,7 +254,7 @@ pub fn import_file(
         .unwrap_or("")
         .to_ascii_lowercase();
     if !matches!(format.as_str(), "ttml" | "lrc" | "elrc") {
-        return Err("Solo se admiten TTML, LRC y ELRC.".into());
+        return Err(i18n::msg("backend.lyrics.unsupportedFormat"));
     }
     validate_file(
         path,
@@ -277,7 +277,7 @@ pub fn import_file(
         content,
         translation: None,
         source: "local".into(),
-        attribution: "Letras: colección local".into(),
+        attribution: attribution(i18n::msg("backend.lyrics.localCollection")),
         attribution_links: Vec::new(),
         source_url: Some(path.to_string_lossy().into_owned()),
         confidence: 1.0,
@@ -319,19 +319,17 @@ pub async fn resolve(
             .timeout(Duration::from_secs(6))
             .user_agent("UxNow/0.1")
             .build()
-            .map_err(|_| "No se pudo preparar la búsqueda online".to_string())?;
+            .map_err(|_| i18n::msg("backend.lyrics.onlineSetupFailed"))?;
         if config.spicy_lyrics_enabled {
-            if let Some(token) = spotify_token.as_deref() {
-                match crate::spicy::find(&client, &track, token).await {
-                    Ok(Some(candidate)) => {
-                        if let Some(candidate) = consider_candidate(candidate, &mut fallback) {
-                            cache(&db, &key, &candidate)?;
-                            return Ok(Some(candidate));
-                        }
+            match crate::spicy::find(&client, &track, spotify_token.as_deref()).await {
+                Ok(Some(candidate)) => {
+                    if let Some(candidate) = consider_candidate(candidate, &mut fallback) {
+                        cache(&db, &key, &candidate)?;
+                        return Ok(Some(candidate));
                     }
-                    Ok(None) => {}
-                    Err(error) => provider_failures.push(error),
                 }
+                Ok(None) => {}
+                Err(error) => provider_failures.push(error),
             }
         }
         for provider in &config.provider_order {
@@ -363,7 +361,7 @@ pub async fn resolve(
         return Ok(Some(candidate));
     }
     if !provider_failures.is_empty() {
-        return Err(provider_failures.join(" · "));
+        return Err(i18n::list(&provider_failures));
     }
     Ok(None)
 }
@@ -401,10 +399,10 @@ pub async fn alternatives(
             }
         }
         if config.spicy_lyrics_enabled {
-            if let Some(token) = spotify_token.as_deref() {
-                if let Ok(Some(value)) = crate::spicy::find(&client, &track, token).await {
-                    result.push(value);
-                }
+            if let Ok(Some(value)) =
+                crate::spicy::find(&client, &track, spotify_token.as_deref()).await
+            {
+                result.push(value);
             }
         }
     }
@@ -564,7 +562,10 @@ fn local_matches(db: &Path, track: &TrackMetadata) -> Result<Vec<LyricsCandidate
             content,
             translation: None,
             source: "local".into(),
-            attribution: format!("Letras: colección local · {}", row.1),
+            attribution: attribution(i18n::msg_with(
+                "backend.lyrics.localCollectionFile",
+                &[("file", row.1.clone())],
+            )),
             attribution_links: Vec::new(),
             source_url: Some(row.0),
             confidence,
@@ -705,7 +706,7 @@ fn unison_candidate(track: &TrackMetadata, response: &Value) -> Option<LyricsCan
             format,
             content: content.to_string(),
             source: "unison",
-            attribution: "Lyrics from Unison (https://unison.boidu.dev)",
+            attribution: "Lyrics from Unison (https://unison.boidu.dev)".into(),
             source_url: video_id.map(|value| format!("https://unison.boidu.dev/lyrics?v={value}")),
             confidence,
         },
@@ -797,7 +798,7 @@ fn lrclib_candidate(track: &TrackMetadata, item: LrclibItem) -> Option<LyricsCan
             format,
             content,
             source: "lrclib",
-            attribution: "Letras: LRCLIB",
+            attribution: attribution("LRCLIB".into()),
             source_url: Some(format!("https://lrclib.net/api/get/{}", item.id)),
             confidence: 0.8,
         },
@@ -814,9 +815,13 @@ struct CandidateSpec<'a> {
     format: &'a str,
     content: String,
     source: &'a str,
-    attribution: &'a str,
+    attribution: String,
     source_url: Option<String>,
     confidence: f32,
+}
+/// "Lyrics: {source}" as a message descriptor; `source` is a name or a descriptor.
+pub fn attribution(source: String) -> String {
+    i18n::msg_with("backend.lyrics.attribution", &[("source", source)])
 }
 fn candidate(track: &TrackMetadata, spec: CandidateSpec<'_>) -> LyricsCandidate {
     LyricsCandidate {
@@ -830,7 +835,7 @@ fn candidate(track: &TrackMetadata, spec: CandidateSpec<'_>) -> LyricsCandidate 
         content: spec.content,
         translation: None,
         source: spec.source.into(),
-        attribution: spec.attribution.into(),
+        attribution: spec.attribution,
         attribution_links: Vec::new(),
         source_url: spec.source_url,
         confidence: spec.confidence,
@@ -1107,6 +1112,6 @@ mod tests {
         .expect("LRCLIB uses camelCase fields");
         let candidate = lrclib_candidate(&sample_track(), item).expect("candidate");
         assert_eq!(candidate.format, "lrc");
-        assert_eq!(candidate.attribution, "Letras: LRCLIB");
+        assert_eq!(candidate.attribution, attribution("LRCLIB".into()));
     }
 }

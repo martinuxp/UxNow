@@ -73,6 +73,7 @@ export interface Diagnostics {
 
 export interface DiagnosticItem {
   ok: boolean;
+  /** Plain text or a message descriptor (see src/i18n/core.ts). */
   label: string;
   detail: string;
 }
@@ -96,16 +97,20 @@ export interface AppConfig {
   lyricsFont: FontChoice;
   globalLyricsOffsetMs: number;
   syncWithUxplayProgress: boolean;
+  /** Interface language code; empty until detected from the system on first start. */
+  language: string;
 }
 
 
 export interface SpotifyLinkStatus {
   connected: boolean;
   linking: boolean;
+  /** Message descriptor from Rust. */
   message: string;
 }
 
 export interface UxPlayEvent {
+  /** Message descriptor from Rust, or a raw uxPlay log line. */
   message: string;
   phase: ServicePhase;
   clientId?: string;

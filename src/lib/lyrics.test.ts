@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLrc, parseSpicyLyrics, parseTimestamp, parseTtml, toAmllLines } from "./lyrics";
+import { normalizeLyricLines, parseLrc, parseSpicyLyrics, parseTimestamp, parseTtml, toAmllLines } from "./lyrics";
 
 describe("lyrics parsers", () => {
   it("parses minute timestamps", () => expect(parseTimestamp("01:02.50")).toBe(62_500));
@@ -48,6 +48,17 @@ describe("lyrics parsers", () => {
     ]);
   });
   it("rejects malformed TTML", () => expect(() => parseTtml("<tt><p>")).toThrow());
+  it("repairs impossible TTML word times without dropping words", () => {
+    const [line] = normalizeLyricLines([{ text: "Tres palabras juntas", startTime: 44_000, endTime: 46_000, words: [
+      { text: "Tres ", startTime: 44_100, endTime: 44_300 },
+      { text: "palabras ", startTime: 44_900, endTime: 0 },
+      { text: "juntas", startTime: 0, endTime: 0 },
+    ] }]);
+    expect(line.words.map((word) => word.text).join("")).toBe("Tres palabras juntas");
+    expect(line.words).toHaveLength(3);
+    expect(line.words.every((word) => Number.isFinite(word.startTime) && word.endTime > word.startTime && word.startTime >= line.startTime && word.endTime <= line.endTime)).toBe(true);
+    expect(toAmllLines([line])[0].words).toHaveLength(3);
+  });
   it("converts SpicyLyrics syllables, spaces and background vocals for AMLL", () => {
     const result = parseSpicyLyrics(JSON.stringify({ Content: [{
       Type: "Vocal", OppositeAligned: true,

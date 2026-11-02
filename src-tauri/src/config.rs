@@ -26,6 +26,8 @@ pub struct AppConfig {
     pub lyrics_font: String,
     pub global_lyrics_offset_ms: i64,
     pub sync_with_uxplay_progress: bool,
+    /// UI language code; empty until the UI detects the system language.
+    pub language: String,
 }
 
 impl Default for AppConfig {
@@ -55,6 +57,7 @@ impl Default for AppConfig {
             lyrics_font: "Google Sans Flex SemiBold".into(),
             global_lyrics_offset_ms: 0,
             sync_with_uxplay_progress: true,
+            language: String::new(),
         }
     }
 }
@@ -85,17 +88,18 @@ pub fn update(config: &AppConfig, patch: Value) -> Result<AppConfig, String> {
     let mut value = serde_json::to_value(config).map_err(|e| e.to_string())?;
     let target = value
         .as_object_mut()
-        .ok_or("Configuración interna inválida")?;
+        .ok_or_else(|| crate::i18n::msg("backend.config.internalInvalid"))?;
     let incoming = patch
         .as_object()
-        .ok_or("El cambio de configuración debe ser un objeto")?;
+        .ok_or_else(|| crate::i18n::msg("backend.config.patchNotObject"))?;
     for (key, value) in incoming {
         if target.contains_key(key) {
             target.insert(key.clone(), value.clone());
         }
     }
-    let mut next: AppConfig =
-        serde_json::from_value(value).map_err(|e| format!("Configuración inválida: {e}"))?;
+    let mut next: AppConfig = serde_json::from_value(value).map_err(|e| {
+        crate::i18n::msg_with("backend.config.invalid", &[("error", e.to_string())])
+    })?;
     next.global_lyrics_offset_ms = next.global_lyrics_offset_ms.clamp(-5000, 5000);
     Ok(next)
 }
@@ -118,15 +122,38 @@ pub fn save_atomic(path: &Path, config: &AppConfig) -> Result<(), String> {
 
 pub fn discover_uxplay(config: &AppConfig, resource_dir: &Path) -> Option<PathBuf> {
     let mut candidates = Vec::new();
-    if !config.uxplay_path.trim().is_empty() {
+    let previous_bundled_path = is_bundled_path(&config.uxplay_path);
+    if !config.uxplay_path.trim().is_empty() && !previous_bundled_path {
         candidates.push(PathBuf::from(&config.uxplay_path));
     }
-    candidates.push(resource_dir.join("_internal/bin/uxplay.exe"));
+    if let Some(bundled) = bundled_uxplay(resource_dir) {
+        candidates.push(bundled);
+    }
+    if previous_bundled_path {
+        candidates.push(PathBuf::from(&config.uxplay_path));
+    }
+    #[cfg(debug_assertions)]
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../_internal/bin/uxplay.exe"));
     candidates.push(resource_dir.join("runtime/uxplay.exe"));
     candidates.push(resource_dir.join("vendor/uxplay/build/uxplay.exe"));
     if let Ok(path) = std::env::var("PATH") {
         candidates.extend(std::env::split_paths(&path).map(|entry| entry.join("uxplay.exe")));
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn is_bundled_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    normalized == "_internal/bin/uxplay.exe"
+        || normalized.ends_with("/_internal/bin/uxplay.exe")
+}
+
+pub fn bundled_uxplay(resource_dir: &Path) -> Option<PathBuf> {
+    let mut candidates = vec![resource_dir.join("_internal/bin/uxplay.exe")];
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            candidates.push(directory.join("_internal/bin/uxplay.exe"));
+        }
     }
     candidates.into_iter().find(|path| path.is_file())
 }
@@ -154,6 +181,55 @@ pub fn bundled_gstreamer(binary: &Path) -> Option<BundledGStreamer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_uxplay_is_the_default_when_no_custom_path_is_set() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("uxnow-bundled-{stamp}"));
+        let bin = root.join("_internal/bin");
+        fs::create_dir_all(&bin).expect("create bundled path");
+        let executable = bin.join("uxplay.exe");
+        fs::write(&executable, b"test").expect("create bundled executable");
+        let found = discover_uxplay(&AppConfig::default(), &root);
+        assert_eq!(found, Some(executable));
+
+        let custom_bin = root.join("custom");
+        fs::create_dir_all(&custom_bin).expect("custom bin");
+        let custom = custom_bin.join("uxplay.exe");
+        fs::write(&custom, b"custom").expect("custom executable");
+        let config = AppConfig {
+            uxplay_path: custom.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        };
+        assert_eq!(discover_uxplay(&config, &root), Some(custom));
+        fs::remove_dir_all(root).expect("cleanup bundled path");
+    }
+
+    #[test]
+    fn current_bundle_wins_over_an_older_bundle_path() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("uxnow-upgrade-{stamp}"));
+        let current_bin = root.join("current/_internal/bin");
+        let older_bin = root.join("older/_internal/bin");
+        fs::create_dir_all(&current_bin).expect("current bin");
+        fs::create_dir_all(&older_bin).expect("older bin");
+        let current = current_bin.join("uxplay.exe");
+        let older = older_bin.join("uxplay.exe");
+        fs::write(&current, b"current").expect("current executable");
+        fs::write(&older, b"older").expect("older executable");
+        let config = AppConfig {
+            uxplay_path: older.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        };
+        assert_eq!(discover_uxplay(&config, &root.join("current")), Some(current));
+        fs::remove_dir_all(root).expect("cleanup upgrade paths");
+    }
 
     #[test]
     fn older_configurations_receive_typography_defaults() {

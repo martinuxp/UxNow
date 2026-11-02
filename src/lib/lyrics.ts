@@ -1,4 +1,5 @@
 import { parseTTML as parseAmllTtml } from "@applemusic-like-lyrics/ttml";
+import { encodeMessage } from "../i18n/core";
 import type { LyricLine } from "../types";
 
 export function parseTimestamp(value: string): number {
@@ -33,8 +34,8 @@ export function parseLrc(content: string): LyricLine[] {
 
 export function parseTtml(content: string): LyricLine[] {
   const result = parseAmllTtml(content);
-  if (!result.lines.length) return parseBasicTtml(content);
-  return result.lines.map((line) => {
+  if (!result.lines.length) return normalizeLyricLines(parseBasicTtml(content));
+  return normalizeLyricLines(result.lines.map((line) => {
     const words = line.words.map((word) => ({
       text: word.word,
       startTime: word.startTime,
@@ -49,12 +50,34 @@ export function parseTtml(content: string): LyricLine[] {
       isBackground: line.isBG,
       isDuet: line.isDuet,
     };
+  }));
+}
+
+// Some community TTML files contain reversed word ranges or zero timestamps
+// inside otherwise valid lines. AMLL's animation engine expects finite,
+// increasing ranges; repair those ranges while preserving every word.
+export function normalizeLyricLines(lines: LyricLine[]): LyricLine[] {
+  return lines.map((line) => {
+    const firstWordStart = line.words.find((word) => Number.isFinite(word.startTime) && word.startTime >= 0)?.startTime ?? 0;
+    const startTime = Number.isFinite(line.startTime) && line.startTime >= 0 ? line.startTime : firstWordStart;
+    const lastWordEnd = Math.max(startTime, ...line.words.map((word) => Number.isFinite(word.endTime) ? word.endTime : startTime));
+    const endTime = Number.isFinite(line.endTime) && line.endTime > startTime ? line.endTime : Math.max(startTime + 1, lastWordEnd);
+    let cursor = startTime;
+    const words = line.words.map((word) => {
+      const rawStart = Number.isFinite(word.startTime) && word.startTime >= startTime && word.startTime < endTime ? word.startTime : cursor;
+      const wordStart = Math.min(endTime - 1, Math.max(cursor, rawStart));
+      const rawEnd = Number.isFinite(word.endTime) && word.endTime > wordStart ? word.endTime : wordStart + 1;
+      const wordEnd = Math.min(endTime, Math.max(wordStart + 1, rawEnd));
+      cursor = wordEnd;
+      return { ...word, startTime: wordStart, endTime: wordEnd };
+    });
+    return { ...line, startTime, endTime, words };
   });
 }
 
 function parseBasicTtml(content: string): LyricLine[] {
   const xml = new DOMParser().parseFromString(content, "application/xml");
-  if (xml.querySelector("parsererror")) throw new Error("El TTML no es XML válido.");
+  if (xml.querySelector("parsererror")) throw new Error(encodeMessage("lyrics.parse.invalidXml"));
   return [...xml.querySelectorAll("p")].map((node) => {
     const startTime = parseTimestamp(node.getAttribute("begin") ?? "0");
     const endTime = parseTimestamp(node.getAttribute("end") ?? "0") || startTime + 5000;
@@ -137,7 +160,7 @@ function spicyVoiceLine(voice: SpicyVoice, background: boolean, duet: boolean): 
 
 export function parseSpicyLyrics(content: string): LyricLine[] {
   const body = JSON.parse(content) as { Content?: SpicyBlock[] };
-  if (!Array.isArray(body.Content)) throw new Error("SpicyLyrics devolvió un formato no reconocido.");
+  if (!Array.isArray(body.Content)) throw new Error(encodeMessage("lyrics.parse.spicyFormat"));
   return body.Content.flatMap((block) => {
     const lines: LyricLine[] = [];
     if (block.Lead) {
@@ -156,7 +179,7 @@ export function parseSpicyLyrics(content: string): LyricLine[] {
 }
 
 export function toAmllLines(lines: LyricLine[]) {
-  return lines.map((line) => ({
+  return normalizeLyricLines(lines).map((line) => ({
     words: line.words.map((word) => ({
       word: word.text,
       startTime: Math.round(word.startTime),

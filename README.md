@@ -23,8 +23,8 @@ their existing output.
   service/progress events.
 - Metadata and cover-art watcher with stable-read delay.
 - TTML, LRC, and ELRC import/indexing and drag-and-drop association.
-- Modular providers for BiniLyrics, Unison, and LRCLIB. SpicyLyrics remains a
-  separate Spotify integration.
+- Modular providers for BiniLyrics, Unison, and LRCLIB, plus SpicyLyrics,
+  which works without a Spotify account.
 - Diagnostics for uxPlay, GStreamer, WASAPI, network, firewall, and audio.
 - Per-process stream volume through Windows Core Audio.
 - Closing the window hides UxNow in the system tray while the receiver keeps
@@ -85,8 +85,8 @@ adapter is isolated so it can be updated without changing the UI.
 Build it following upstream's Windows/MSYS2 instructions. UxNow looks for the
 binary in this order:
 
-1. Path selected in **Ajustes → Ejecutable de uxPlay**.
-2. `_internal/bin/uxplay.exe` in the packaged resource directory, when bundled.
+1. External path selected in **Ajustes → Ejecutable de uxPlay**.
+2. `_internal/bin/uxplay.exe` in the packaged resource directory or beside the installed app, when bundled.
 3. `_internal/bin/uxplay.exe` at the repository root during development.
 4. `runtime/uxplay.exe`.
 5. `vendor/uxplay/build/uxplay.exe`.
@@ -97,6 +97,11 @@ contains the WASAPI plugin, UxNow sets their paths only for its uxPlay child
 process. The locally supplied `_internal` is for development testing only and
 is not copied into release installers. The integrated build uses the separately
 staged `runtime/bundled-candidate` and includes its source and license inventory.
+With no custom path selected, Settings shows the effective bundled executable;
+it does not save an absolute installation path, so moving or updating the app
+does not leave a stale preference. Use **Usar incluido** to clear an older
+custom selection. A saved `_internal` path from an older installation is
+automatically superseded by the runtime in the current installation.
 
 ### Building the official Windows runtime
 
@@ -108,16 +113,24 @@ install the build and audio dependencies:
 pacman -Syu
 pacman -S mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-libplist mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base mingw-w64-ucrt-x86_64-gst-libav mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad
 cd /d/UxNow/vendor/uxplay
+git apply ../../patches/uxplay/*.patch
 cmake -S . -B build -G Ninja
 cmake --build build
 ./build/uxplay.exe -v
 ```
 
-The last four commands assume you are in the repository root; adjust the
-path if necessary. If MSYS2 asks to close and reopen its terminal after
+The last five commands use the default checkout path; adjust it if
+necessary. If MSYS2 asks to close and reopen its terminal after
 `pacman -Syu`, do that before installing packages. The pinned upstream
 snapshot uses its built-in Windows mDNS implementation, so this build does not
-require Bonjour. See [upstream's Windows instructions](https://github.com/FDH2/UxPlay/blob/master/README.md#building-uxplay-on-microsoft-windows-using-msys2-with-the-mingw-64-compiler) for details.
+require Bonjour.
+
+`patches/uxplay/` holds Windows build fixes on top of the pinned commit.
+`0001-windows-link-only-ws2_32.patch` stops linking `wsock32`: with it,
+`setsockopt` came from WinSock 1, which reads the WinSock 2 `IP_MULTICAST_IF`
+value as a different option, so mDNS replies left through the lowest-metric
+adapter (Tailscale, VirtualBox, VPNs) and iPhones never saw the receiver. The
+staging and bundle scripts refuse a runtime without the patches. See [upstream's Windows instructions](https://github.com/FDH2/UxPlay/blob/master/README.md#building-uxplay-on-microsoft-windows-using-msys2-with-the-mingw-64-compiler) for details.
 
 To prepare an integrated installer, run
 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage-uxplay-runtime.ps1`.
@@ -203,11 +216,16 @@ npm run tauri build
   the switch can be turned off independently of the saved global lyrics offset.
 - BiniLyrics, Unison, and LRCLIB require no key. Availability and catalogue
   coverage depend on each external service.
-- SpicyLyrics requires Spotify OAuth (PKCE), online-lyrics consent, and its
-  separate switch in Settings. UxNow uses a publishable client key, not a
-  secret key. Spotify is linked for the current app session only; relink after
-  restarting UxNow. SpicyLyrics is queried before the other online providers
-  when enabled, while local and pinned/cached word-level lyrics keep priority.
+- SpicyLyrics requires online-lyrics consent and its separate switch in
+  Settings. Its lyrics are keyed by Spotify track ID: without a Spotify
+  account UxNow resolves the ID from title, artist and album through the
+  [ListenBrainz Labs](https://labs.api.listenbrainz.org/) metadata lookup,
+  which covers most catalogue tracks but can miss very recent releases.
+  Linking Spotify (OAuth with PKCE) is optional and uses Spotify search
+  instead, falling back to ListenBrainz when it finds no match. UxNow uses a
+  publishable SpicyLyrics key, not a secret key. Spotify is linked for the
+  current app session only; relink after restarting UxNow. SpicyLyrics is
+  queried before the other online providers when enabled, while local and pinned/cached word-level lyrics keep priority.
   Its API may intermittently return 503; UxNow retries briefly, then continues
   with the next source. Community syncs display the available uploader/maker
   links beside the provider name, as required by the
@@ -226,8 +244,20 @@ npm run tauri build
 ## Firewall troubleshooting
 
 Use a Private Windows network profile and ensure the sender and PC share the
-same network without client isolation. uxPlay requires an inbound firewall
-allow rule. UxNow diagnoses but never creates firewall rules automatically.
+same network without client isolation. Bundled installers from version 0.1.1
+request Administrator permission and add an inbound rule for the packaged
+`uxplay.exe`, limited to Private networks and the local subnet. The rule is
+removed by the uninstaller. No Public-network or system-wide port rule is
+created. If policy blocks the change, check the Firewall diagnostic in
+Settings. The development build does not change firewall rules.
+
+If the iPhone sends queries but never lists the receiver, check that
+`uxplay.exe` does not import `wsock32.dll` (see `patches/uxplay/`). Builds
+made before that patch answer mDNS through whichever adapter has the lowest
+interface metric, often a VPN or virtual adapter instead of the LAN.
+
+Version 0.1.0 used a per-user NSIS installer. Uninstall that copy before
+installing the new per-machine build to avoid two UxNow installations.
 
 ## License
 

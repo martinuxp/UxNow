@@ -95,13 +95,13 @@ pub fn set_process_volume(device_id: &str, process_id: u32, volume: f32) -> Resu
                 return Ok(());
             }
         }
-        Err("La sesión de audio de uxPlay todavía no está disponible.".into())
+        Err(crate::i18n::msg("backend.audio.sessionUnavailable"))
     }
 }
 
 #[cfg(not(windows))]
 pub fn set_process_volume(_: &str, _: u32, _: f32) -> Result<(), String> {
-    Err("Disponible únicamente en Windows".into())
+    Err(crate::i18n::msg("backend.audio.windowsOnly"))
 }
 
 #[cfg(windows)]

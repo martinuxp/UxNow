@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { DEFAULT_LYRICS_FONT, DEFAULT_UI_FONT } from "./lib/fonts";
+import { encodeMessage } from "./i18n/core";
 import { DEMO_CANDIDATE, DEMO_LINES, DEMO_TRACK } from "./demo";
 import { lyricsSessionKey } from "./lib/trackIdentity";
 import type { AppConfig, AudioDevice, Diagnostics, LibraryEntry, LyricLine, LyricsCandidate, Page, ServicePhase, TrackMetadata } from "./types";
@@ -22,12 +23,14 @@ export const DEFAULT_CONFIG: AppConfig = {
   lyricsFont: DEFAULT_LYRICS_FONT,
   globalLyricsOffsetMs: 0,
   syncWithUxplayProgress: true,
+  language: "",
 };
 
 interface AppStore {
   page: Page;
   config: AppConfig;
   servicePhase: ServicePhase;
+  /** Message descriptor (or raw text) translated when rendered. */
   serviceMessage: string;
   track?: TrackMetadata;
   positionMs: number;
@@ -59,7 +62,7 @@ export const useAppStore = create<AppStore>((set) => ({
   page: "receiver",
   config: DEFAULT_CONFIG,
   servicePhase: "stopped",
-  serviceMessage: "Inicia el receptor para aparecer en AirPlay.",
+  serviceMessage: encodeMessage("receiver.startHint"),
   positionMs: 0,
   devices: [],
   lyricLines: [],
@@ -84,7 +87,7 @@ export const useAppStore = create<AppStore>((set) => ({
   activateDemo: () => set({
     page: "now-playing",
     servicePhase: "streaming",
-    serviceMessage: "Sesión de demostración",
+    serviceMessage: encodeMessage("demo.session"),
     track: DEMO_TRACK,
     lyrics: DEMO_CANDIDATE,
     lyricLines: DEMO_LINES,
